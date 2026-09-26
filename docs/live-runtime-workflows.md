@@ -56,6 +56,48 @@ claim. Resume fails closed until an operator explicitly selects
 `--retry-failed-stages`; that one-shot audited decision permits one fresh-canary
 attempt. A positive stage is completed only after the finding is persisted.
 
+## Receipt-backed API response-contract validation
+
+API validation is opt-in and requires the exact discovery plan that supplied the
+OpenAPI receipt:
+
+```bash
+metisblack run http://127.0.0.1:8080/ \
+  --discovery-plan examples/web-discovery-plan.json \
+  --api-validation-plan examples/api-validation-plan.json \
+  --authorize --output runs/api-contract
+```
+
+The API plan binds the discovery-plan fingerprint and exact source URL, method,
+path and optional `operationId`. Only concrete, anonymously accessible,
+input-free `GET`, `HEAD` and `OPTIONS` declarations are eligible. Authentication,
+required parameters or request bodies, server/path variables, mutation methods,
+remote references and selected unsupported constructs fail closed; no weaker
+request is substituted.
+
+The orchestrator reconstructs the contract from the sealed discovery receipt and
+persists an exact action intent before each primary or replay request. The typed
+runtime performs one checked-and-pinned DNS request with environment proxies and
+redirects disabled and no credentials or cookie jar. Receipts contain no response
+scalar values: only the status, normalized media type, sanitized header names,
+body-prefix hash and a bounded JSON shape. Transient statuses, undeclared statuses,
+malformed/truncated bodies, unsupported schemas and structural truncation are
+inconclusive. A low-severity contract finding requires a distinct replay receipt
+with the same verified contract, status, media type and canonical structural
+violation. It proves response/declaration inconsistency only and is excluded from
+attack-chain facts.
+
+The example plan assumes the owned loopback document declares `GET /health` and
+`operationId: health`, and is fingerprint-bound to
+`examples/web-discovery-plan.json`; change and re-hash the plans together for
+another authorized lab. Contract-normalization or probe failures create an
+explicit no-coverage failed stage and are never repeated automatically; a resume
+with `--retry-failed-stages` authorizes one audited fresh attempt. Standalone API
+retests use their own durable exact-action intents and recover a sealed receipt or
+record an indeterminate no-repeat outcome after a crash. Authenticated roles, authorization
+differentials, GraphQL execution and state-changing CRUD require later typed
+stories with credential isolation and verified cleanup.
+
 ## Browser automation
 
 Start a W3C WebDriver endpoint (ChromeDriver, GeckoDriver, SafariDriver, or a

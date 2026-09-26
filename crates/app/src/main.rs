@@ -48,6 +48,10 @@ struct Cli {
     /// Strict bounded web-surface discovery plan JSON.
     #[arg(long, global = true)]
     discovery_plan: Option<PathBuf>,
+    /// Strict read-only OpenAPI response-contract validation plan JSON.
+    /// Requires a matching bound discovery plan.
+    #[arg(long, global = true)]
+    api_validation_plan: Option<PathBuf>,
     #[arg(long, global = true)]
     fail_on: Option<String>,
     #[arg(long, global = true)]
@@ -138,7 +142,7 @@ enum Command {
     },
     Resume {
         run_dir: PathBuf,
-        /// Explicitly allow a failed browser/cloud/panel stage to repeat I/O.
+        /// Explicitly allow a failed browser/cloud/panel/API stage to repeat I/O once.
         #[arg(long)]
         retry_failed_stages: bool,
     },
@@ -271,6 +275,9 @@ fn configure(cli: &Cli, mode: Mode, targets: Vec<String>) -> Result<RunConfig> {
     }
     if let Some(path) = &cli.discovery_plan {
         c.discovery_plan = Some(path.clone());
+    }
+    if let Some(path) = &cli.api_validation_plan {
+        c.api_validation_plan = Some(path.clone());
     }
     Ok(c)
 }

@@ -1,4 +1,4 @@
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use domain::{now_ms, Receipt, ToolOutput, SCHEMA_VERSION};
 use std::{
     fs::{self, OpenOptions},
@@ -6,6 +6,35 @@ use std::{
     path::{Path, PathBuf},
 };
 use storage::{hash, random_id, safe_component, secure_dir, Redactor};
+
+fn publish_create_new(pending: &Path, sealed: &Path) -> Result<()> {
+    let directory = sealed
+        .parent()
+        .context("receipt requires parent directory")?;
+    ensure!(
+        pending.parent() == Some(directory),
+        "pending receipt must share the sealed receipt directory"
+    );
+    fs::hard_link(pending, sealed)
+        .inspect_err(|_| {
+            // Publication did not occur, so the private staging blob is safe
+            // to discard. A sync failure below deliberately retains it.
+            let _ = fs::remove_file(pending);
+        })
+        .with_context(|| {
+            format!(
+                "publish receipt without replacing existing entry: {}",
+                sealed.display()
+            )
+        })?;
+    // The pending file was synced before publication. Syncing the directory
+    // now makes the new hard-link entry durable on Unix before the expendable
+    // pending name is removed. Other platforms explicitly report that
+    // directory syncing is unsupported rather than claiming power-loss safety.
+    let _directory_sync = storage::sync_directory(directory)?;
+    let _ = fs::remove_file(pending);
+    Ok(())
+}
 
 #[derive(Clone)]
 pub struct EvidenceStore {
@@ -70,9 +99,7 @@ impl EvidenceStore {
         drop(f);
         // Atomic publication without replacing an existing receipt. A crash may
         // leave a .pending blob, which is never treated as a valid receipt.
-        let result = fs::hard_link(&temporary, &p);
-        let _ = fs::remove_file(&temporary);
-        result?;
+        publish_create_new(&temporary, &p)?;
         Ok(receipt)
     }
     pub fn get(&self, id: &str) -> Result<Receipt> {
@@ -124,22 +151,73 @@ impl EvidenceStore {
 mod tests {
     use super::*;
     use domain::ToolAction;
+
+    fn sample_output() -> ToolOutput {
+        ToolOutput {
+            action: ToolAction::DnsResolve {
+                host: "localhost".into(),
+            },
+            successful: true,
+            data: serde_json::json!(["127.0.0.1"]),
+            truncated: false,
+        }
+    }
+
+    #[test]
+    fn publishes_verifiable_receipt_and_removes_pending_name() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = EvidenceStore::new(directory.path(), "run-test", Redactor::default())?;
+
+        let receipt = store.capture("test", sample_output())?;
+
+        let verified = store.get(&receipt.id)?;
+        assert_eq!(verified.id, receipt.id);
+        assert_eq!(verified.content_hash, receipt.content_hash);
+        let manifest = store.manifest()?;
+        assert_eq!(manifest.len(), 1);
+        assert_eq!(manifest[0].id, receipt.id);
+        assert!(fs::read_dir(directory.path())?.all(|entry| {
+            entry
+                .map(|entry| entry.path().extension().is_none_or(|ext| ext != "pending"))
+                .unwrap_or(false)
+        }));
+        Ok(())
+    }
+
+    #[test]
+    fn manifest_ignores_abandoned_pending_blobs() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let store = EvidenceStore::new(directory.path(), "run-test", Redactor::default())?;
+        fs::write(directory.path().join("abandoned.pending"), b"not a receipt")?;
+
+        let receipt = store.capture("test", sample_output())?;
+
+        let manifest = store.manifest()?;
+        assert_eq!(manifest.len(), 1);
+        assert_eq!(manifest[0].id, receipt.id);
+        Ok(())
+    }
+
+    #[test]
+    fn publication_never_replaces_an_existing_sealed_entry() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let pending = directory.path().join("candidate.pending");
+        let sealed = directory.path().join("receipt.json");
+        fs::write(&pending, b"candidate")?;
+        fs::write(&sealed, b"original")?;
+
+        assert!(publish_create_new(&pending, &sealed).is_err());
+        assert_eq!(fs::read(&sealed)?, b"original");
+        assert!(!pending.exists());
+        Ok(())
+    }
+
     #[test]
     fn rejects_fabrication_and_mutation() -> Result<()> {
         let d = tempfile::tempdir()?;
         let s = EvidenceStore::new(d.path(), "run-test", Redactor::default())?;
         assert!(s.get("fake-receipt").is_err());
-        let r = s.capture(
-            "test",
-            ToolOutput {
-                action: ToolAction::DnsResolve {
-                    host: "localhost".into(),
-                },
-                successful: true,
-                data: serde_json::json!(["127.0.0.1"]),
-                truncated: false,
-            },
-        )?;
+        let r = s.capture("test", sample_output())?;
         assert!(s.get(&r.id).is_ok());
         let mut changed = r.clone();
         changed.actor = "forged".into();

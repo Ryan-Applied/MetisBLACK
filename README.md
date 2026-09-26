@@ -163,10 +163,28 @@ Black-box and grey-box runs use a finite, same-plan-origin breadth-first discove
 plan. The default plan is generated from the target; `--discovery-plan` accepts a
 strict versioned plan such as [examples/web-discovery-plan.json](examples/web-discovery-plan.json).
 Discovery observes HTML links, script references, form shapes, robots/sitemaps,
-bounded JavaScript URL hints, and OpenAPI v2/v3 declarations. It does not execute
-JavaScript, submit forms, invoke declared API operations, or create a finding by
-itself. Bounds above the defaults require an audited `data_sampling` override and
-remain subject to hard finite ceilings.
+bounded JavaScript URL hints, and OpenAPI v2/v3 declarations. Discovery itself
+does not execute JavaScript, submit forms, invoke declared API operations, or
+create a finding. An optional strict API-validation plan can select concrete,
+input-free, anonymously accessible `GET`, `HEAD`, or `OPTIONS` declarations from
+that verified discovery result:
+
+```bash
+cargo run --locked -p metisblack-app -- \
+  run http://127.0.0.1:8080/ --authorize \
+  --discovery-plan examples/web-discovery-plan.json \
+  --api-validation-plan examples/api-validation-plan.json \
+  --output ./runs/local-api-contract
+```
+
+The sample API plan is hash-bound to the sample discovery plan and assumes the
+owned local OpenAPI document declares `GET /health` with `operationId: health`.
+Validation sends no
+credentials, follows no redirects, retains no response values, and requires an
+exact independent replay before reporting a narrow response-contract mismatch.
+It does not test authorization or establish exploit impact, and its observations
+cannot seed attack-chain facts. Bounds above the defaults require an audited
+`data_sampling` override and remain subject to hard finite ceilings.
 
 Discovered query parameters may be checked by the narrow open-redirect validator.
 Each check sends one GET with a fresh `https://metisblack.invalid/` canary and
@@ -224,8 +242,10 @@ Depending on the mode, a run directory can contain:
 - `source-flow-analysis.json` with bounded lexical paths and explicit limitations
 - `web-discovery/<plan-hash>/plan.json`, atomic `checkpoint.json`, `artifact.json`,
   and `stage.json` with receipt and canonical-hash lineage
-- durable discovery and open-redirect operation intents, including explicit
-  indeterminate/failed-stage retry provenance
+- `api-validation/<plan-hash>/` contracts, checkpoints, artifact, stage/failure
+  records and primary/replay intents, plus standalone `api-retest-intents/`
+- durable discovery, open-redirect and API operation intents, including explicit
+  indeterminate/no-repeat and failed-stage retry provenance
 - provider-step records and account-cleanup state
 - `browser-plan-result.json` or `browser-authenticated-workflow-result.json`, private browser artifacts, and common browser receipts
 - `cloud-live-result.json`, `cloud-iam-graph.json`, verified identity/command audits, and common cloud receipts

@@ -14,7 +14,11 @@ Boundaries and controls:
 - Filesystem: canonical-root checks, symlink rejection, no source execution,
   bounded UTF-8 reads, secret-path exclusions, immutable source hashes.
 - Evidence: harness-generated identifiers, content hashes, run/actor correlation,
-  independent replay and narrow deterministic claim predicates.
+  independent replay, directory-synced create-new publication on Unix, and narrow
+  deterministic claim predicates.
+- API contracts: only receipt-derived, concrete anonymous read-only declarations
+  are executable; runtime observations retain status, media, a raw-prefix hash and
+  bounded value-free structure, never scalar response values or credentials.
 - Secrets: opaque references, authenticated encryption, restrictive permissions,
   redaction at capture and report boundaries, no secrets in command arguments.
 - Budgets: a shared atomic reservation per operation; account creation and other
@@ -29,6 +33,14 @@ not tampering by an actor who controls the local account and can rewrite both
 records and hashes. Local administrators can read process memory and vault keys.
 HTTP GET can cause changes on poorly designed servers; authorization must cover
 the permitted endpoints. No production-safety claim follows from a read-only verb.
+OpenAPI declarations can be malicious or inaccurate; remote references,
+authentication requirements, required inputs and unsupported selected structures
+fail closed, and repeated response drift is not evidence of exploitability.
+YAML support uses the non-deprecated `serde_yaml_ng` compatibility fork, whose
+parser still has the `unsafe-libyaml` transitive dependency. Document bytes are
+hard-capped before parsing and selected structures are bounded afterward, but
+this is not process isolation; the dependency-policy lane must stay green and a
+mature pure-Rust replacement should be preferred when compatibility is proven.
 
 Expert overrides are an explicit second trust tier. Every operational control has
 a named override; `--unsafe-all` expands the entire set. Actor, meaningful reason,

@@ -1,19 +1,21 @@
 [package]
-name = "metisblack-domain"
+name = "metisblack-api-validation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
-[lints]
-workspace = true
+[lib]
+name = "api_validation"
 
 [dependencies]
+anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-anyhow.workspace = true
+serde_yaml.workspace = true
+storage = { package = "metisblack-storage", path = "../storage" }
 url.workspace = true
 
-[dev-dependencies]
-tempfile.workspace = true
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "plan_id": "owned-local-api-contract-lab",
+  "selectors": [
+    {
+      "discovery_plan_hash": "6c7a08b4b1993303bbe9782b57078220b7ec1a7764b9515b21e0a3c5f00fe458",
+      "openapi_source_url": "http://127.0.0.1:8080/openapi.json",
+      "method": "get",
+      "path": "/health",
+      "operation_id": "health"
+    }
+  ],
+  "bounds": {
+    "max_selectors": 128,
+    "max_document_bytes": 2097152,
+    "max_response_bytes": 1048576,
+    "max_ref_depth": 16,
+    "max_ref_nodes": 10000,
+    "max_schema_depth": 24,
+    "max_schema_nodes": 10000,
+    "max_properties": 2000,
+    "max_shape_depth": 24,
+    "max_shape_nodes": 10000,
+    "max_array_items": 1000,
+    "max_results": 10000
+  }
+}

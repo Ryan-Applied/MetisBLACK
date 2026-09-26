@@ -1,8 +1,10 @@
 //! All live I/O crosses this boundary; shell execution requires explicit expert overrides.
 use anyhow::{anyhow, ensure, Context, Result};
 use domain::{
-    AuthorizationProvenance, Control, ObservationKind, OpenRedirectObservation, Receipt,
-    ToolAction, ToolOutput, OPEN_REDIRECT_OBSERVATION_SCHEMA_VERSION,
+    ApiProbeMethod, ApiRequestProvenance, ApiSchemaObservation, AuthorizationProvenance, Control,
+    JsonBodyClassification, JsonPropertyShape, JsonShape, ObservationKind, OpenRedirectObservation,
+    Receipt, ToolAction, ToolOutput, API_SCHEMA_OBSERVATION_SCHEMA_VERSION,
+    OPEN_REDIRECT_OBSERVATION_SCHEMA_VERSION,
 };
 use evidence::EvidenceStore;
 use policy::Policy;
@@ -22,6 +24,127 @@ use tokio::{
     sync::{Mutex, Semaphore},
     time::{sleep, timeout, Instant},
 };
+
+fn normalize_media_type(raw: &str) -> Option<String> {
+    let media_type = raw.split(';').next()?.trim().to_ascii_lowercase();
+    (!media_type.is_empty()
+        && media_type.len() <= 127
+        && media_type.bytes().all(|byte| {
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || matches!(
+                    byte,
+                    b'/' | b'!' | b'#' | b'$' | b'&' | b'^' | b'_' | b'.' | b'+' | b'-' | b'*'
+                )
+        }))
+    .then_some(media_type)
+}
+
+fn canonical_api_addresses(addrs: &[SocketAddr]) -> Result<Vec<String>> {
+    let mut canonical = addrs.iter().map(ToString::to_string).collect::<Vec<_>>();
+    canonical.sort();
+    canonical.dedup();
+    ensure!(
+        canonical.len() <= 64,
+        "API schema resolved-address count exceeds the hard ceiling"
+    );
+    Ok(canonical)
+}
+
+fn json_shape(
+    value: &serde_json::Value,
+    remaining: &mut u32,
+    depth: u16,
+    max_depth: u16,
+    max_properties: u32,
+    max_array_items: u32,
+) -> Option<JsonShape> {
+    if *remaining == 0 || depth > max_depth {
+        return None;
+    }
+    *remaining -= 1;
+    match value {
+        serde_json::Value::Null => Some(JsonShape::Null),
+        serde_json::Value::Bool(_) => Some(JsonShape::Boolean),
+        serde_json::Value::Number(number) => Some(if number.is_i64() || number.is_u64() {
+            JsonShape::Integer
+        } else {
+            JsonShape::Number
+        }),
+        serde_json::Value::String(_) => Some(JsonShape::String),
+        serde_json::Value::Array(values) => {
+            if values.len() > usize::try_from(max_array_items).ok()? {
+                return None;
+            }
+            let mut elements = Vec::with_capacity(values.len().min(*remaining as usize));
+            for value in values {
+                elements.push(json_shape(
+                    value,
+                    remaining,
+                    depth.saturating_add(1),
+                    max_depth,
+                    max_properties,
+                    max_array_items,
+                )?);
+            }
+            Some(JsonShape::Array { elements })
+        }
+        serde_json::Value::Object(values) => {
+            if values.len() > usize::try_from(max_properties).ok()?
+                || values.keys().any(|key| key.len() > 4096)
+            {
+                return None;
+            }
+            let mut properties = Vec::with_capacity(values.len().min(*remaining as usize));
+            for (key, value) in values {
+                properties.push(JsonPropertyShape {
+                    name: key.clone(),
+                    shape: json_shape(
+                        value,
+                        remaining,
+                        depth.saturating_add(1),
+                        max_depth,
+                        max_properties,
+                        max_array_items,
+                    )?,
+                });
+            }
+            properties.sort_by(|left, right| left.name.cmp(&right.name));
+            Some(JsonShape::Object { properties })
+        }
+    }
+}
+
+fn classify_json_shape(
+    bytes: &[u8],
+    max_shape_nodes: u32,
+    max_shape_depth: u16,
+    max_properties: u32,
+    max_array_items: u32,
+) -> Result<(JsonBodyClassification, Option<JsonShape>, u32, bool)> {
+    if bytes.is_empty() {
+        return Ok((JsonBodyClassification::Empty, None, 0, false));
+    }
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return Ok((JsonBodyClassification::InvalidUtf8, None, 0, false));
+    };
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Ok((JsonBodyClassification::InvalidJson, None, 0, false));
+    };
+    let mut remaining = max_shape_nodes;
+    let Some(shape) = json_shape(
+        &value,
+        &mut remaining,
+        0,
+        max_shape_depth,
+        max_properties,
+        max_array_items,
+    ) else {
+        return Ok((JsonBodyClassification::ValidJson, None, 0, true));
+    };
+    let count = max_shape_nodes - remaining;
+    Ok((JsonBodyClassification::ValidJson, Some(shape), count, false))
+}
 
 /// The generated credential is retained only after a successful account response.
 /// Dropping the HTTP future on timeout/cancellation also invalidates the secret.
@@ -196,7 +319,12 @@ impl Runtime {
                 truncated: false,
             },
         };
-        output.data["authorization_provenance"] = json!({"authorized":self.authorized,"explicit_override":self.policy.bypasses(Control::Authorization)});
+        // Strict typed observations carry authorization in their own schema.
+        // Do not append an untyped field that would make deny_unknown_fields
+        // replay fail.
+        if !matches!(output.action, ToolAction::ApiSchemaProbe { .. }) {
+            output.data["authorization_provenance"] = json!({"authorized":self.authorized,"explicit_override":self.policy.bypasses(Control::Authorization)});
+        }
         self.evidence
             .capture_with_override(actor, output, self.policy.overrides())
     }
@@ -253,6 +381,34 @@ impl Runtime {
                 parameter,
                 canary,
             } => self.open_redirect_probe(endpoint, parameter, canary).await,
+            ToolAction::ApiSchemaProbe {
+                plan_hash,
+                contract_hash,
+                probe_id,
+                method,
+                url,
+                allowed_origins,
+                max_response_bytes,
+                max_shape_nodes,
+                max_shape_depth,
+                max_properties,
+                max_array_items,
+            } => {
+                self.api_schema_probe(
+                    plan_hash,
+                    contract_hash,
+                    probe_id,
+                    *method,
+                    url,
+                    allowed_origins,
+                    *max_response_bytes,
+                    *max_shape_nodes,
+                    *max_shape_depth,
+                    *max_properties,
+                    *max_array_items,
+                )
+                .await
+            }
             ToolAction::HttpRequest { url, method, body } => {
                 self.http_request(url, method, body.as_ref(), false).await
             }
@@ -486,6 +642,10 @@ impl Runtime {
         let port = target.port_or_known_default().context("missing port")?;
         self.slot().await?;
         let addrs = self.resolve_with_policy(&self.policy, host, port).await?;
+        ensure!(
+            addrs.len() <= 64,
+            "API schema DNS result exceeds the immutable typed-observation ceiling"
+        );
         let mut builder = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy()
@@ -649,6 +809,186 @@ impl Runtime {
         observation.validate()?;
         Ok((serde_json::to_value(observation)?, truncated))
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn api_schema_probe(
+        &self,
+        plan_hash: &str,
+        contract_hash: &str,
+        probe_id: &str,
+        method: ApiProbeMethod,
+        raw: &str,
+        allowed_origins: &[String],
+        max_response_bytes: u32,
+        max_shape_nodes: u32,
+        max_shape_depth: u16,
+        max_properties: u32,
+        max_array_items: u32,
+    ) -> Result<(serde_json::Value, bool)> {
+        // check_action has already enforced canonical identifiers, hard caps,
+        // central scope and the immutable exact-origin acquisition boundary.
+        let target = self.policy.check_url(raw)?;
+        ensure!(
+            target.as_str() == raw
+                && target.username().is_empty()
+                && target.password().is_none()
+                && allowed_origins.contains(&target.origin().ascii_serialization()),
+            "API schema target is not canonical, credential-free and inside the plan origins"
+        );
+        let host = target
+            .host_str()
+            .context("missing host")?
+            .trim_matches(['[', ']']);
+        let port = target.port_or_known_default().context("missing port")?;
+
+        self.slot().await?;
+        let addrs = self.resolve_with_policy(&self.policy, host, port).await?;
+        // Every resolver result has already passed policy. Canonicalize only
+        // after those checks, then enforce the typed receipt's non-bypassable
+        // provenance ceiling before live HTTP I/O.
+        let resolved_addresses = canonical_api_addresses(&addrs)?;
+        let mut builder = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .no_proxy()
+            .resolve_to_addrs(host, &addrs);
+        if !self.policy.bypasses(Control::Timeouts) {
+            builder = builder
+                .timeout(Duration::from_secs(15))
+                .connect_timeout(Duration::from_secs(5));
+        }
+        let client = builder.build()?;
+        let request_method = match method {
+            ApiProbeMethod::Get => reqwest::Method::GET,
+            ApiProbeMethod::Head => reqwest::Method::HEAD,
+            ApiProbeMethod::Options => reqwest::Method::OPTIONS,
+        };
+        let mut response = client
+            .request(request_method, target.clone())
+            .header(
+                "user-agent",
+                format!("MetisBLACK/{} authorized-assessment", domain::VERSION),
+            )
+            .send()
+            .await
+            .context("API schema probe failed")?;
+
+        let status = response.status().as_u16();
+        let set_cookie_present = response.headers().contains_key(reqwest::header::SET_COOKIE);
+        let declared_content_length = response.content_length();
+        let media_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(normalize_media_type);
+        let mut headers_truncated = false;
+        let mut header_names = Vec::new();
+        for name in response.headers().keys() {
+            let name = name.as_str().to_ascii_lowercase();
+            if matches!(
+                name.as_str(),
+                "authorization"
+                    | "proxy-authorization"
+                    | "set-cookie"
+                    | "www-authenticate"
+                    | "proxy-authenticate"
+            ) {
+                continue;
+            }
+            if name.is_empty()
+                || name.len() > 128
+                || !name
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+            {
+                headers_truncated = true;
+                continue;
+            }
+            header_names.push(name);
+        }
+        header_names.sort();
+        header_names.dedup();
+        headers_truncated |= header_names.len() > 128;
+        header_names.truncate(128);
+
+        let limit = usize::try_from(max_response_bytes)?;
+        let mut bytes = Vec::with_capacity(limit.min(64 * 1024));
+        let mut body_truncated = false;
+        while let Some(chunk) = response.chunk().await? {
+            self.check_cancelled()?;
+            let remaining = limit.saturating_sub(bytes.len());
+            if chunk.len() > remaining {
+                bytes.extend_from_slice(&chunk[..remaining]);
+                body_truncated = true;
+                break;
+            }
+            bytes.extend_from_slice(&chunk);
+            if bytes.len() == limit {
+                // A declared larger length proves truncation without reading
+                // beyond the finite cap. Otherwise one more chunk is required
+                // to distinguish an exact-bound body from a longer stream.
+                if declared_content_length.is_some_and(|length| length > limit as u64) {
+                    body_truncated = true;
+                    break;
+                }
+            }
+        }
+
+        let (json_classification, json_shape, shape_node_count, shape_truncated) = if body_truncated
+        {
+            // A prefix can independently be valid JSON (for example `0`) or
+            // look malformed even though the complete response is valid. Do
+            // not turn either accident into conformance evidence.
+            (JsonBodyClassification::Truncated, None, 0, false)
+        } else {
+            classify_json_shape(
+                &bytes,
+                max_shape_nodes,
+                max_shape_depth,
+                max_properties,
+                max_array_items,
+            )?
+        };
+        let observation = ApiSchemaObservation {
+            schema_version: API_SCHEMA_OBSERVATION_SCHEMA_VERSION,
+            kind: ObservationKind::ApiSchema,
+            plan_hash: plan_hash.to_owned(),
+            contract_hash: contract_hash.to_owned(),
+            probe_id: probe_id.to_owned(),
+            method,
+            url: target.into(),
+            status,
+            media_type,
+            header_names,
+            headers_truncated,
+            set_cookie_present,
+            declared_content_length,
+            body_hash: hash(&bytes),
+            body_bytes: u32::try_from(bytes.len())?,
+            body_truncated,
+            json_classification,
+            json_shape,
+            shape_node_count,
+            shape_truncated,
+            max_response_bytes,
+            max_shape_nodes,
+            max_shape_depth,
+            max_properties,
+            max_array_items,
+            request_provenance: ApiRequestProvenance {
+                resolved_addresses,
+                request_count: 1,
+                redirect_followed: false,
+                proxy_used: false,
+                credentials_sent: false,
+                authorization_provenance: AuthorizationProvenance {
+                    authorized: self.authorized,
+                    explicit_override: self.policy.bypasses(Control::Authorization),
+                },
+            },
+        };
+        observation.validate()?;
+        Ok((serde_json::to_value(observation)?, body_truncated))
+    }
     async fn http_request(
         &self,
         raw: &str,
@@ -799,6 +1139,33 @@ mod tests {
     use super::*;
     use policy::{scope_for_url, Policy};
     use tokio::{io::AsyncWriteExt, sync::oneshot};
+
+    #[test]
+    fn api_media_type_normalization_matches_the_bounded_contract_token_subset() {
+        assert_eq!(
+            normalize_media_type("Application/Vnd.foo_bar!#$&^+*-json; charset=utf-8"),
+            Some("application/vnd.foo_bar!#$&^+*-json".into())
+        );
+        assert_eq!(normalize_media_type("application/vnd.foo%bar"), None);
+    }
+
+    #[test]
+    fn api_resolved_address_provenance_is_canonical_and_hard_bounded() -> Result<()> {
+        let addresses = vec![
+            "192.0.2.2:443".parse()?,
+            "192.0.2.1:443".parse()?,
+            "192.0.2.2:443".parse()?,
+        ];
+        assert_eq!(
+            canonical_api_addresses(&addresses)?,
+            vec!["192.0.2.1:443", "192.0.2.2:443"]
+        );
+        let oversized = (1..=65)
+            .map(|port| SocketAddr::from(([192, 0, 2, 1], port)))
+            .collect::<Vec<_>>();
+        assert!(canonical_api_addresses(&oversized).is_err());
+        Ok(())
+    }
     async fn serve(response: &'static str) -> Result<(String, tokio::task::JoinHandle<()>)> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}", listener.local_addr()?);
@@ -831,6 +1198,67 @@ mod tests {
             }
         });
         Ok((url, received, handle))
+    }
+    async fn serve_bytes_capture(
+        response: Vec<u8>,
+    ) -> Result<(
+        String,
+        oneshot::Receiver<String>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let (sent, received) = oneshot::channel();
+        let handle = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut bytes = vec![0; 8192];
+                let read = stream.read(&mut bytes).await.unwrap_or(0);
+                bytes.truncate(read);
+                let _ = sent.send(String::from_utf8_lossy(&bytes).into_owned());
+                let _ = stream.write_all(&response).await;
+            }
+        });
+        Ok((url, received, handle))
+    }
+    fn api_action(
+        url: &str,
+        method: ApiProbeMethod,
+        max_response_bytes: u32,
+        max_shape_nodes: u32,
+    ) -> Result<ToolAction> {
+        api_action_with_bounds(
+            url,
+            method,
+            max_response_bytes,
+            max_shape_nodes,
+            domain::API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH,
+            domain::API_SCHEMA_DEFAULT_MAX_PROPERTIES,
+            domain::API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS,
+        )
+    }
+    fn api_action_with_bounds(
+        url: &str,
+        method: ApiProbeMethod,
+        max_response_bytes: u32,
+        max_shape_nodes: u32,
+        max_shape_depth: u16,
+        max_properties: u32,
+        max_array_items: u32,
+    ) -> Result<ToolAction> {
+        let parsed = url::Url::parse(url)?;
+        Ok(ToolAction::ApiSchemaProbe {
+            plan_hash: "a".repeat(64),
+            contract_hash: "b".repeat(64),
+            probe_id: format!("api-schema-{}", "c".repeat(64)),
+            method,
+            url: parsed.as_str().into(),
+            allowed_origins: vec![parsed.origin().ascii_serialization()],
+            max_response_bytes,
+            max_shape_nodes,
+            max_shape_depth,
+            max_properties,
+            max_array_items,
+        })
     }
     fn runtime(url: &str, dir: &std::path::Path) -> Result<Runtime> {
         let mut scope = scope_for_url(url)?;
@@ -932,7 +1360,11 @@ mod tests {
             .await?;
         server.await?;
 
-        assert!(receipt.output.successful);
+        assert!(
+            receipt.output.successful,
+            "unexpected probe failure: {}",
+            receipt.output.data
+        );
         assert_eq!(runtime.policy.usage().requests, 1);
         let observed: OpenRedirectObservation =
             serde_json::from_value(receipt.output.data.clone())?;
@@ -1133,6 +1565,478 @@ mod tests {
         assert_eq!(
             receipt.expert_override.unwrap().controls,
             overrides.controls
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_uses_exact_methods_and_retains_no_response_values() -> Result<()> {
+        for method in [
+            ApiProbeMethod::Get,
+            ApiProbeMethod::Head,
+            ApiProbeMethod::Options,
+        ] {
+            let body = r#"{"user":"fixture-secret","password":"fixture-secret","count":987654321,"nested":[true,null]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json; private=fixture-secret\r\nSet-Cookie: session=fixture-secret\r\nWWW-Authenticate: Bearer fixture-secret\r\nX-Structural: present\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let (url, request, server) = serve_capture(response).await?;
+            let directory = tempfile::tempdir()?;
+            let runtime = runtime(&url, directory.path())?;
+            let receipt = runtime
+                .execute("api-schema", api_action(&url, method, 4096, 64)?)
+                .await?;
+            server.await?;
+            assert!(receipt.output.successful);
+            let observation: ApiSchemaObservation =
+                serde_json::from_value(receipt.output.data.clone())?;
+            observation.validate()?;
+            assert_eq!(observation.method, method);
+            assert_eq!(observation.request_provenance.request_count, 1);
+            assert!(!observation.request_provenance.redirect_followed);
+            assert!(!observation.request_provenance.proxy_used);
+            assert!(!observation.request_provenance.credentials_sent);
+            assert!(observation.set_cookie_present);
+            assert!(!observation.header_names.contains(&"set-cookie".into()));
+            assert!(!observation
+                .header_names
+                .contains(&"www-authenticate".into()));
+            assert_eq!(observation.media_type.as_deref(), Some("application/json"));
+            if method == ApiProbeMethod::Head {
+                assert_eq!(
+                    observation.json_classification,
+                    JsonBodyClassification::Empty
+                );
+            } else {
+                assert_eq!(
+                    observation.json_classification,
+                    JsonBodyClassification::ValidJson
+                );
+                assert!(matches!(
+                    observation.json_shape,
+                    Some(JsonShape::Object { .. })
+                ));
+            }
+            let serialized = serde_json::to_string(&receipt.output.data)?;
+            assert!(!serialized.contains("fixture-secret"));
+            assert!(!serialized.contains("987654321"));
+            let request = request.await?;
+            assert!(
+                request.starts_with(&format!("{} / HTTP/1.1\r\n", method.as_str())),
+                "unexpected request: {request}"
+            );
+            assert!(!request.to_ascii_lowercase().contains("authorization:"));
+            assert!(!request.to_ascii_lowercase().contains("cookie:"));
+            assert_eq!(runtime.policy.usage().requests, 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_classifies_invalid_utf8_invalid_json_and_shape_caps() -> Result<()> {
+        let cases = [
+            (
+                vec![0xff, 0xfe],
+                JsonBodyClassification::InvalidUtf8,
+                16,
+                false,
+            ),
+            (
+                b"{not-json".to_vec(),
+                JsonBodyClassification::InvalidJson,
+                16,
+                false,
+            ),
+            (
+                b"[1,2,3,4]".to_vec(),
+                JsonBodyClassification::ValidJson,
+                3,
+                true,
+            ),
+        ];
+        for (body, expected, nodes, expected_shape_truncated) in cases {
+            let mut response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .into_bytes();
+            response.extend_from_slice(&body);
+            let (url, request, server) = serve_bytes_capture(response).await?;
+            let directory = tempfile::tempdir()?;
+            let runtime = runtime(&url, directory.path())?;
+            let receipt = runtime
+                .execute(
+                    "api-classifier",
+                    api_action(&url, ApiProbeMethod::Get, 4096, nodes)?,
+                )
+                .await?;
+            server.await?;
+            let _ = request.await?;
+            assert!(receipt.output.successful);
+            let observation: ApiSchemaObservation = serde_json::from_value(receipt.output.data)?;
+            observation.validate()?;
+            assert_eq!(observation.json_classification, expected);
+            assert_eq!(observation.shape_truncated, expected_shape_truncated);
+            if expected_shape_truncated {
+                assert!(observation.json_shape.is_none());
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn api_json_shape_caps_fail_closed_without_retaining_partial_values() -> Result<()> {
+        let cases = [
+            (r#"{"a":{"b":{"c":1}}}"#, 8, 1, 16, 16),
+            (r#"{"a":1,"b":2}"#, 8, 8, 1, 16),
+            (r#"[1,2]"#, 8, 8, 16, 1),
+        ];
+        for (body, nodes, depth, properties, array_items) in cases {
+            let (classification, shape, count, truncated) =
+                classify_json_shape(body.as_bytes(), nodes, depth, properties, array_items)?;
+            assert_eq!(classification, JsonBodyClassification::ValidJson);
+            assert!(shape.is_none());
+            assert_eq!(count, 0);
+            assert!(truncated);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_turns_each_shape_overflow_into_value_free_evidence() -> Result<()> {
+        let cases = [
+            (r#"[1,2,3]"#, 3, 8, 16, 16),
+            (r#"{"a":{"b":1}}"#, 16, 1, 16, 16),
+            (r#"{"a":1,"b":2}"#, 16, 8, 1, 16),
+            (r#"[1,2]"#, 16, 8, 16, 1),
+        ];
+        for (body, nodes, depth, properties, array_items) in cases {
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let (url, request, server) = serve_capture(response).await?;
+            let directory = tempfile::tempdir()?;
+            let runtime = runtime(&url, directory.path())?;
+            let receipt = runtime
+                .execute(
+                    "api-shape-bound",
+                    api_action_with_bounds(
+                        &url,
+                        ApiProbeMethod::Get,
+                        4096,
+                        nodes,
+                        depth,
+                        properties,
+                        array_items,
+                    )?,
+                )
+                .await?;
+            server.await?;
+            let _ = request.await?;
+            assert!(receipt.output.successful);
+            let observation: ApiSchemaObservation = serde_json::from_value(receipt.output.data)?;
+            observation.validate()?;
+            assert_eq!(
+                observation.json_classification,
+                JsonBodyClassification::ValidJson
+            );
+            assert!(observation.json_shape.is_none());
+            assert_eq!(observation.shape_node_count, 0);
+            assert!(observation.shape_truncated);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_bounds_unsupported_header_names() -> Result<()> {
+        let body = r#"{"ok":true}"#;
+        let long_name = format!("x-{}", "a".repeat(127));
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX_Bad: ignored\r\n{long_name}: ignored\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let (url, request, server) = serve_capture(response).await?;
+        let directory = tempfile::tempdir()?;
+        let runtime = runtime(&url, directory.path())?;
+        let receipt = runtime
+            .execute(
+                "api-hostile-header",
+                api_action(&url, ApiProbeMethod::Get, 4096, 64)?,
+            )
+            .await?;
+        server.await?;
+        let _ = request.await?;
+        assert!(
+            receipt.output.successful,
+            "unexpected hostile-header probe failure: {}",
+            receipt.output.data
+        );
+        let observation: ApiSchemaObservation = serde_json::from_value(receipt.output.data)?;
+        observation.validate()?;
+        assert!(observation.headers_truncated);
+        assert!(observation.header_names.len() <= 128);
+        assert!(!observation.header_names.iter().any(|name| name == "x_bad"));
+        assert!(!observation
+            .header_names
+            .iter()
+            .any(|name| name == &long_name));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_stops_at_byte_cap_and_never_contacts_redirect() -> Result<()> {
+        let destination = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let destination_url = format!("http://{}/must-not-connect", destination.local_addr()?);
+        let body = b"{\"long\":\"response-value\"}";
+        let response = format!(
+            "HTTP/1.1 302 Found\r\nLocation: {destination_url}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let mut response = response.into_bytes();
+        response.extend_from_slice(body);
+        let (url, request, server) = serve_bytes_capture(response).await?;
+        let directory = tempfile::tempdir()?;
+        let runtime = runtime(&url, directory.path())?;
+        let receipt = runtime
+            .execute(
+                "api-truncation",
+                api_action(&url, ApiProbeMethod::Get, 8, 16)?,
+            )
+            .await?;
+        server.await?;
+        let _ = request.await?;
+        let observation: ApiSchemaObservation = serde_json::from_value(receipt.output.data)?;
+        observation.validate()?;
+        assert_eq!(observation.status, 302);
+        assert_eq!(observation.body_bytes, 8);
+        assert!(observation.body_truncated);
+        assert_eq!(
+            observation.json_classification,
+            JsonBodyClassification::Truncated
+        );
+        assert!(observation.json_shape.is_none());
+        assert_eq!(observation.shape_node_count, 0);
+        assert!(!observation.shape_truncated);
+        assert!(receipt.output.truncated);
+        assert_eq!(observation.request_provenance.request_count, 1);
+        assert!(!observation.request_provenance.redirect_followed);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), destination.accept())
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_obeys_timeout_and_preflight_cancellation() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = [0u8; 1024];
+                let _ = stream.read(&mut request).await;
+                sleep(Duration::from_millis(100)).await;
+                let _ = stream
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+        let mut scope = scope_for_url(&url)?;
+        scope.requests_per_second = 100;
+        scope.tool_timeout_ms = 10;
+        let directory = tempfile::tempdir()?;
+        let mut timeout_runtime = Runtime::new(
+            Policy::new(scope)?,
+            EvidenceStore::new(directory.path(), "run-timeout", Redactor::default())?,
+            Redactor::default(),
+        );
+        timeout_runtime.authorize(true);
+        let receipt = timeout_runtime
+            .execute(
+                "api-timeout",
+                api_action(&url, ApiProbeMethod::Get, 1024, 16)?,
+            )
+            .await?;
+        assert!(!receipt.output.successful);
+        assert!(receipt.output.data["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("timeout")));
+        server.await?;
+
+        let (cancel_url, _request, cancel_server) = serve_capture(
+            "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".into(),
+        )
+        .await?;
+        let cancel_directory = tempfile::tempdir()?;
+        let cancelled = runtime(&cancel_url, cancel_directory.path())?;
+        cancelled.cancel();
+        assert!(cancelled
+            .execute(
+                "api-cancelled",
+                api_action(&cancel_url, ApiProbeMethod::Get, 1024, 16)?,
+            )
+            .await
+            .is_err());
+        cancel_server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_seals_post_contact_cancellation_as_failure() -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let (accepted_tx, accepted_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let server = tokio::spawn(async move {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                return false;
+            };
+            let mut bytes = vec![0; 8192];
+            let read = stream.read(&mut bytes).await.unwrap_or(0);
+            bytes.truncate(read);
+            let _ = accepted_tx.send(String::from_utf8_lossy(&bytes).into_owned());
+            // Withhold the response until cancellation has completed so this
+            // cannot collapse into the preflight-cancellation path.
+            let _ = release_rx.await;
+            drop(stream);
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_ok()
+        });
+
+        let directory = tempfile::tempdir()?;
+        let runtime = Arc::new(runtime(&url, directory.path())?);
+        let executing = Arc::clone(&runtime);
+        let action = api_action(&url, ApiProbeMethod::Get, 1024, 16)?;
+        let execution =
+            tokio::spawn(async move { executing.execute("api-post-contact-cancel", action).await });
+
+        let request = timeout(Duration::from_secs(2), accepted_rx)
+            .await
+            .context("API cancellation fixture was not contacted")??;
+        assert_eq!(request.matches("GET / HTTP/1.1\r\n").count(), 1);
+        assert_eq!(runtime.policy.usage().requests, 1);
+
+        runtime.cancel();
+        let joined = timeout(Duration::from_secs(2), execution)
+            .await
+            .context("post-contact cancellation did not stop execution")?;
+        let receipt = joined??;
+        let _ = release_tx.send(());
+        assert!(!server.await?, "cancellation caused a second request");
+
+        assert!(!receipt.output.successful);
+        assert!(!receipt.output.truncated);
+        assert!(matches!(
+            receipt.output.action,
+            ToolAction::ApiSchemaProbe { .. }
+        ));
+        assert!(receipt.output.data["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("cancelled")));
+        assert!(
+            serde_json::from_value::<ApiSchemaObservation>(receipt.output.data.clone()).is_err()
+        );
+        let sealed = runtime.evidence.get(&receipt.id)?;
+        assert_eq!(sealed.content_hash, receipt.content_hash);
+        assert!(!sealed.output.successful);
+        assert_eq!(runtime.policy.usage().requests, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_schema_probe_ignores_environment_proxies_in_child_process() -> Result<()> {
+        const CHILD_MARKER: &str = "METISBLACK_API_PROXY_ISOLATION_CHILD";
+        const TARGET_URL: &str = "METISBLACK_API_PROXY_ISOLATION_TARGET";
+
+        if std::env::var_os(CHILD_MARKER).is_some() {
+            let target = std::env::var(TARGET_URL).context("missing child target URL")?;
+            let directory = tempfile::tempdir()?;
+            let receipt = runtime(&target, directory.path())?
+                .execute(
+                    "api-proxy-isolation-child",
+                    api_action(&target, ApiProbeMethod::Get, 1024, 16)?,
+                )
+                .await?;
+            assert!(
+                receipt.output.successful,
+                "child probe failed: {}",
+                receipt.output.data
+            );
+            let observation: ApiSchemaObservation = serde_json::from_value(receipt.output.data)?;
+            observation.validate()?;
+            return Ok(());
+        }
+
+        let (target, target_request, target_server) = serve_capture(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 11\r\nConnection: close\r\n\r\n{\"ok\":true}"
+                .into(),
+        )
+        .await?;
+        let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let proxy_url = format!("http://{}", proxy_listener.local_addr()?);
+        let proxy_trap = tokio::spawn(async move {
+            let Ok((mut stream, _)) = proxy_listener.accept().await else {
+                return false;
+            };
+            let _ = stream
+                .write_all(
+                    b"HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .await;
+            true
+        });
+
+        let mut child = tokio::process::Command::new(std::env::current_exe()?);
+        child
+            .arg("tests::api_schema_probe_ignores_environment_proxies_in_child_process")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env(CHILD_MARKER, "1")
+            .env(TARGET_URL, &target)
+            .env("HTTP_PROXY", &proxy_url)
+            .env("HTTPS_PROXY", &proxy_url)
+            .env("ALL_PROXY", &proxy_url)
+            .env("http_proxy", &proxy_url)
+            .env("https_proxy", &proxy_url)
+            .env("all_proxy", &proxy_url)
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy")
+            .kill_on_drop(true);
+        let output = timeout(Duration::from_secs(10), child.output())
+            .await
+            .context("proxy-isolation child timed out")??;
+
+        let target_request = timeout(Duration::from_secs(2), target_request).await;
+        if target_server.is_finished() {
+            target_server.await?;
+        } else {
+            target_server.abort();
+        }
+        let proxy_contacted = if proxy_trap.is_finished() {
+            proxy_trap.await?
+        } else {
+            proxy_trap.abort();
+            false
+        };
+        assert!(
+            output.status.success(),
+            "proxy-isolation child failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let target_request =
+            target_request.context("child did not contact the intended target")??;
+        assert!(
+            target_request.starts_with("GET / HTTP/1.1\r\n"),
+            "unexpected direct target request: {target_request}"
+        );
+        assert!(
+            !proxy_contacted,
+            "API schema probe contacted environment proxy"
         );
         Ok(())
     }

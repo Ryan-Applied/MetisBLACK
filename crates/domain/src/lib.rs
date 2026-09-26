@@ -1,14 +1,26 @@
 //! Versioned contracts. Model candidates deliberately cannot set finding state.
-use anyhow::{bail, ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
+    net::SocketAddr,
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
 pub const OPEN_REDIRECT_OBSERVATION_SCHEMA_VERSION: u32 = 1;
+pub const API_SCHEMA_OBSERVATION_SCHEMA_VERSION: u32 = 1;
+pub const API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES: u32 = 1_048_576;
+pub const API_SCHEMA_HARD_MAX_RESPONSE_BYTES: u32 = 16 * 1_048_576;
+pub const API_SCHEMA_DEFAULT_MAX_SHAPE_NODES: u32 = 10_000;
+pub const API_SCHEMA_HARD_MAX_SHAPE_NODES: u32 = 100_000;
+pub const API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH: u16 = 24;
+pub const API_SCHEMA_HARD_MAX_SHAPE_DEPTH: u16 = 64;
+pub const API_SCHEMA_DEFAULT_MAX_PROPERTIES: u32 = 2_000;
+pub const API_SCHEMA_HARD_MAX_PROPERTIES: u32 = 20_000;
+pub const API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS: u32 = 1_000;
+pub const API_SCHEMA_HARD_MAX_ARRAY_ITEMS: u32 = 10_000;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -280,6 +292,22 @@ pub enum ToolAction {
         parameter: String,
         canary: String,
     },
+    /// Observe exactly one read-only API response for a canonical, immutable
+    /// plan/contract selector. The dedicated runtime never follows redirects,
+    /// sends credentials, or retains response values.
+    ApiSchemaProbe {
+        plan_hash: String,
+        contract_hash: String,
+        probe_id: String,
+        method: ApiProbeMethod,
+        url: String,
+        allowed_origins: Vec<String>,
+        max_response_bytes: u32,
+        max_shape_nodes: u32,
+        max_shape_depth: u16,
+        max_properties: u32,
+        max_array_items: u32,
+    },
     HttpRequest {
         url: String,
         method: String,
@@ -328,6 +356,7 @@ impl ToolAction {
             Self::HttpGet { .. } => "http_get",
             Self::WebDiscoveryFetch { .. } => "web_discovery_fetch",
             Self::OpenRedirectProbe { .. } => "open_redirect_probe",
+            Self::ApiSchemaProbe { .. } => "api_schema_probe",
             Self::HttpRequest { .. } => "http_request",
             Self::CreateAccount { .. } => "create_account",
             Self::AiPrompt { .. } => "ai_prompt",
@@ -343,6 +372,7 @@ impl ToolAction {
             Self::HttpGet { url } => url.clone(),
             Self::WebDiscoveryFetch { url, .. } => url.clone(),
             Self::OpenRedirectProbe { endpoint, .. } => endpoint.clone(),
+            Self::ApiSchemaProbe { url, .. } => url.clone(),
             Self::HttpRequest { url, .. }
             | Self::CreateAccount { url, .. }
             | Self::AiPrompt { url, .. } => url.clone(),
@@ -368,6 +398,384 @@ pub struct AuthorizationProvenance {
 #[serde(rename_all = "snake_case")]
 pub enum ObservationKind {
     OpenRedirect,
+    ApiSchema,
+}
+
+/// The only methods admitted by the schema-observation runtime. Using an enum
+/// prevents case folding or an override from turning a read into a mutation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ApiProbeMethod {
+    #[serde(rename = "GET")]
+    Get,
+    #[serde(rename = "HEAD")]
+    Head,
+    #[serde(rename = "OPTIONS")]
+    Options,
+}
+
+impl ApiProbeMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Get => "GET",
+            Self::Head => "HEAD",
+            Self::Options => "OPTIONS",
+        }
+    }
+}
+
+/// Value-free representation of a JSON response. Object keys and array
+/// positions are structural evidence; scalar values are deliberately absent.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
+pub enum JsonShape {
+    Null,
+    Boolean,
+    Integer,
+    Number,
+    String,
+    Array { elements: Vec<JsonShape> },
+    Object { properties: Vec<JsonPropertyShape> },
+}
+
+/// Property names are values of a stable field rather than dynamic map keys.
+/// This prevents the evidence redactor from mistaking a structural API field
+/// such as `password` for a secret-bearing receipt key and corrupting the
+/// typed shape during immutable capture.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JsonPropertyShape {
+    pub name: String,
+    pub shape: JsonShape,
+}
+
+impl JsonShape {
+    pub fn node_count(&self) -> Result<u32> {
+        fn count(shape: &JsonShape, total: &mut u32) -> Result<()> {
+            *total = total
+                .checked_add(1)
+                .context("JSON shape node count overflow")?;
+            match shape {
+                JsonShape::Array { elements } => {
+                    for element in elements {
+                        count(element, total)?;
+                    }
+                }
+                JsonShape::Object { properties } => {
+                    ensure!(
+                        properties
+                            .windows(2)
+                            .all(|pair| pair[0].name < pair[1].name)
+                            && properties
+                                .iter()
+                                .all(|property| property.name.len() <= 4096),
+                        "JSON object shape properties must be sorted, unique and bounded"
+                    );
+                    for property in properties {
+                        count(&property.shape, total)?;
+                    }
+                }
+                JsonShape::Null
+                | JsonShape::Boolean
+                | JsonShape::Integer
+                | JsonShape::Number
+                | JsonShape::String => {}
+            }
+            Ok(())
+        }
+        let mut total = 0;
+        count(self, &mut total)?;
+        Ok(total)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JsonBodyClassification {
+    Empty,
+    ValidJson,
+    InvalidJson,
+    InvalidUtf8,
+    /// The finite byte ceiling was reached before the complete response body
+    /// was observed, so the captured prefix cannot support a JSON claim.
+    Truncated,
+}
+
+/// Typed provenance for a one-request, no-redirect, no-credential observation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApiRequestProvenance {
+    pub resolved_addresses: Vec<String>,
+    pub request_count: u8,
+    pub redirect_followed: bool,
+    pub proxy_used: bool,
+    pub credentials_sent: bool,
+    pub authorization_provenance: AuthorizationProvenance,
+}
+
+/// Strict value-free API response observation. `body_hash` is the exact hash
+/// of the captured raw prefix; `body_truncated` states when the finite capture
+/// ceiling prevented a whole-response hash.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ApiSchemaObservation {
+    pub schema_version: u32,
+    pub kind: ObservationKind,
+    pub plan_hash: String,
+    pub contract_hash: String,
+    pub probe_id: String,
+    pub method: ApiProbeMethod,
+    pub url: String,
+    pub status: u16,
+    pub media_type: Option<String>,
+    /// Sorted, lower-case header names only. Header values are not persisted.
+    pub header_names: Vec<String>,
+    pub headers_truncated: bool,
+    pub set_cookie_present: bool,
+    pub declared_content_length: Option<u64>,
+    pub body_hash: String,
+    pub body_bytes: u32,
+    pub body_truncated: bool,
+    pub json_classification: JsonBodyClassification,
+    pub json_shape: Option<JsonShape>,
+    pub shape_node_count: u32,
+    pub shape_truncated: bool,
+    pub max_response_bytes: u32,
+    pub max_shape_nodes: u32,
+    pub max_shape_depth: u16,
+    pub max_properties: u32,
+    pub max_array_items: u32,
+    pub request_provenance: ApiRequestProvenance,
+}
+
+impl ApiSchemaObservation {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == API_SCHEMA_OBSERVATION_SCHEMA_VERSION,
+            "unsupported API schema observation version"
+        );
+        ensure!(
+            self.kind == ObservationKind::ApiSchema,
+            "invalid API schema observation kind"
+        );
+        ensure!(
+            is_canonical_sha256(&self.plan_hash),
+            "invalid API plan hash"
+        );
+        ensure!(
+            is_canonical_sha256(&self.contract_hash),
+            "invalid API contract hash"
+        );
+        validate_api_probe_id(&self.probe_id)?;
+        let parsed = url::Url::parse(&self.url).context("invalid API observation URL")?;
+        ensure!(
+            matches!(parsed.scheme(), "http" | "https")
+                && parsed.as_str() == self.url
+                && parsed.username().is_empty()
+                && parsed.password().is_none()
+                && parsed.fragment().is_none(),
+            "API observation URL must be canonical credential-free HTTP(S) without a fragment"
+        );
+        ensure!((100..=599).contains(&self.status), "invalid HTTP status");
+        ensure!(
+            (1..=API_SCHEMA_HARD_MAX_RESPONSE_BYTES).contains(&self.max_response_bytes)
+                && (1..=API_SCHEMA_HARD_MAX_SHAPE_NODES).contains(&self.max_shape_nodes)
+                && (1..=API_SCHEMA_HARD_MAX_SHAPE_DEPTH).contains(&self.max_shape_depth)
+                && (1..=API_SCHEMA_HARD_MAX_PROPERTIES).contains(&self.max_properties)
+                && (1..=API_SCHEMA_HARD_MAX_ARRAY_ITEMS).contains(&self.max_array_items),
+            "API observation bounds exceed hard ceilings"
+        );
+        ensure!(
+            self.body_bytes <= self.max_response_bytes,
+            "API observation body exceeds its capture bound"
+        );
+        ensure!(
+            is_canonical_sha256(&self.body_hash),
+            "invalid API body hash"
+        );
+        ensure!(
+            self.header_names.len() <= 128
+                && self.header_names.windows(2).all(|pair| pair[0] < pair[1])
+                && self.header_names.iter().all(|name| {
+                    !name.is_empty()
+                        && name.len() <= 128
+                        && name.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                        })
+                        && !matches!(
+                            name.as_str(),
+                            "authorization"
+                                | "proxy-authorization"
+                                | "set-cookie"
+                                | "www-authenticate"
+                                | "proxy-authenticate"
+                        )
+                }),
+            "API observation header names are not canonical and sanitized"
+        );
+        if let Some(media_type) = &self.media_type {
+            ensure!(
+                !media_type.is_empty()
+                    && media_type.len() <= 127
+                    && media_type.bytes().all(|byte| {
+                        byte.is_ascii_lowercase()
+                            || byte.is_ascii_digit()
+                            || matches!(
+                                byte,
+                                b'/' | b'!'
+                                    | b'#'
+                                    | b'$'
+                                    | b'&'
+                                    | b'^'
+                                    | b'_'
+                                    | b'.'
+                                    | b'+'
+                                    | b'-'
+                                    | b'*'
+                            )
+                    }),
+                "invalid normalized API media type"
+            );
+        }
+        match (&self.json_classification, &self.json_shape) {
+            (JsonBodyClassification::ValidJson, Some(shape)) => {
+                ensure!(!self.shape_truncated, "complete shape marked truncated");
+                ensure!(
+                    shape.node_count()? == self.shape_node_count
+                        && self.shape_node_count <= self.max_shape_nodes,
+                    "JSON shape node count is inconsistent"
+                );
+                shape.validate_capture_bounds(
+                    self.max_shape_depth,
+                    self.max_properties,
+                    self.max_array_items,
+                )?;
+            }
+            (JsonBodyClassification::ValidJson, None) => ensure!(
+                self.shape_truncated && self.shape_node_count == 0,
+                "valid JSON without a shape must record a node-cap truncation"
+            ),
+            (JsonBodyClassification::Truncated, None) => ensure!(
+                self.body_truncated && !self.shape_truncated && self.shape_node_count == 0,
+                "truncated bodies must carry only value-free inconclusive evidence"
+            ),
+            (JsonBodyClassification::Empty, None)
+            | (JsonBodyClassification::InvalidJson, None)
+            | (JsonBodyClassification::InvalidUtf8, None) => ensure!(
+                !self.body_truncated && !self.shape_truncated && self.shape_node_count == 0,
+                "non-JSON observations cannot carry shape evidence"
+            ),
+            _ => bail!("JSON classification contradicts shape evidence"),
+        }
+        ensure!(
+            !self.body_truncated
+                || matches!(self.json_classification, JsonBodyClassification::Truncated),
+            "byte-truncated bodies cannot carry JSON classification or shape claims"
+        );
+        ensure!(
+            !self.request_provenance.resolved_addresses.is_empty()
+                && self.request_provenance.resolved_addresses.len() <= 64
+                && self
+                    .request_provenance
+                    .resolved_addresses
+                    .windows(2)
+                    .all(|pair| pair[0] < pair[1])
+                && self
+                    .request_provenance
+                    .resolved_addresses
+                    .iter()
+                    .all(|address| address.parse::<SocketAddr>().is_ok())
+                && self.request_provenance.request_count == 1
+                && !self.request_provenance.redirect_followed
+                && !self.request_provenance.proxy_used
+                && !self.request_provenance.credentials_sent
+                && (self.request_provenance.authorization_provenance.authorized
+                    || self
+                        .request_provenance
+                        .authorization_provenance
+                        .explicit_override),
+            "API request provenance is incomplete or unsafe"
+        );
+        Ok(())
+    }
+}
+
+impl JsonShape {
+    fn validate_capture_bounds(
+        &self,
+        max_depth: u16,
+        max_properties: u32,
+        max_array_items: u32,
+    ) -> Result<()> {
+        fn visit(
+            shape: &JsonShape,
+            depth: u16,
+            max_depth: u16,
+            max_properties: u32,
+            max_array_items: u32,
+        ) -> Result<()> {
+            ensure!(
+                depth <= max_depth,
+                "JSON shape depth exceeds its capture bound"
+            );
+            match shape {
+                JsonShape::Object { properties } => {
+                    ensure!(
+                        properties.len() <= usize::try_from(max_properties)?,
+                        "JSON object shape exceeds its property bound"
+                    );
+                    for property in properties {
+                        visit(
+                            &property.shape,
+                            depth.saturating_add(1),
+                            max_depth,
+                            max_properties,
+                            max_array_items,
+                        )?;
+                    }
+                }
+                JsonShape::Array { elements } => {
+                    ensure!(
+                        elements.len() <= usize::try_from(max_array_items)?,
+                        "JSON array shape exceeds its item bound"
+                    );
+                    for element in elements {
+                        visit(
+                            element,
+                            depth.saturating_add(1),
+                            max_depth,
+                            max_properties,
+                            max_array_items,
+                        )?;
+                    }
+                }
+                JsonShape::Null
+                | JsonShape::Boolean
+                | JsonShape::Integer
+                | JsonShape::Number
+                | JsonShape::String => {}
+            }
+            Ok(())
+        }
+
+        visit(self, 0, max_depth, max_properties, max_array_items)
+    }
+}
+
+pub fn is_canonical_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+pub fn validate_api_probe_id(probe_id: &str) -> Result<()> {
+    ensure!(
+        probe_id.len() == 75
+            && probe_id.starts_with("api-schema-")
+            && is_canonical_sha256(&probe_id[11..]),
+        "API probe id must be api-schema-<canonical SHA-256>"
+    );
+    Ok(())
 }
 
 /// Strict receipt data for an observe-only open-redirect probe.
@@ -572,9 +980,41 @@ pub enum Proof {
         endpoint: String,
         parameter: String,
     },
+    /// Binds a pure validator's canonical violation artifact to the exact live
+    /// response observation without importing the validator crate here.
+    ApiResponseContractViolation {
+        plan_hash: String,
+        contract_hash: String,
+        probe_id: String,
+        observation_body_hash: String,
+        violation_hash: String,
+    },
     Manual {
         procedure: String,
     },
+}
+
+impl Proof {
+    pub fn validate(&self) -> Result<()> {
+        if let Self::ApiResponseContractViolation {
+            plan_hash,
+            contract_hash,
+            probe_id,
+            observation_body_hash,
+            violation_hash,
+        } = self
+        {
+            ensure!(
+                is_canonical_sha256(plan_hash)
+                    && is_canonical_sha256(contract_hash)
+                    && is_canonical_sha256(observation_body_hash)
+                    && is_canonical_sha256(violation_hash),
+                "API response contract proof hashes must be canonical SHA-256"
+            );
+            validate_api_probe_id(probe_id)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -616,6 +1056,7 @@ impl Candidate {
         self.validate_with_overrides(&ExpertOverrides::default())
     }
     pub fn validate_with_overrides(&self, overrides: &ExpertOverrides) -> Result<()> {
+        self.proof.validate()?;
         ensure!(
             !self.title.trim().is_empty()
                 && (self.title.len() <= 300 || overrides.disables(Control::DataSampling)),
@@ -765,6 +1206,13 @@ pub struct RunConfig {
     /// directory. Set by the engine before the first checkpoint.
     #[serde(default)]
     pub discovery_plan_hash: Option<String>,
+    /// Optional strict API-validation plan for black-box and grey-box modes.
+    /// As with discovery, the implementation contract lives in a pure crate.
+    #[serde(default)]
+    pub api_validation_plan: Option<PathBuf>,
+    /// SHA-256 fingerprint of the engine-bound canonical API validation plan.
+    #[serde(default)]
+    pub api_validation_plan_hash: Option<String>,
     #[serde(default)]
     pub chains: Option<ChainRunConfig>,
     #[serde(default)]
@@ -958,6 +1406,25 @@ impl RunConfig {
                 "discovery_plan_hash requires a canonical discovery plan and SHA-256 value"
             );
         }
+        if self.api_validation_plan.is_some() {
+            ensure!(
+                matches!(self.mode, Mode::Blackbox | Mode::Greybox),
+                "API validation plans require black-box or grey-box mode"
+            );
+            ensure!(
+                self.discovery_plan.is_some(),
+                "API validation plans require a web discovery plan"
+            );
+        }
+        if let Some(plan_hash) = &self.api_validation_plan_hash {
+            ensure!(
+                self.api_validation_plan.is_some()
+                    && self.discovery_plan.is_some()
+                    && self.discovery_plan_hash.is_some()
+                    && is_canonical_sha256(plan_hash),
+                "api_validation_plan_hash requires bound API and discovery plans with a canonical SHA-256 value"
+            );
+        }
         if let Some(panel) = &self.model_panel {
             ensure!(
                 panel.members.len() >= 2 && panel.quorum >= 2,
@@ -1101,6 +1568,181 @@ mod tests {
         let mut serialized = serde_json::to_value(&observation)?;
         serialized["untyped_claim"] = serde_json::json!(true);
         assert!(serde_json::from_value::<OpenRedirectObservation>(serialized).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn api_schema_observation_is_strict_bounded_and_value_free() -> Result<()> {
+        let shape = JsonShape::Object {
+            properties: vec![
+                JsonPropertyShape {
+                    name: "active".into(),
+                    shape: JsonShape::Boolean,
+                },
+                JsonPropertyShape {
+                    name: "name".into(),
+                    shape: JsonShape::String,
+                },
+                JsonPropertyShape {
+                    name: "roles".into(),
+                    shape: JsonShape::Array {
+                        elements: vec![JsonShape::String],
+                    },
+                },
+            ],
+        };
+        let observation = ApiSchemaObservation {
+            schema_version: API_SCHEMA_OBSERVATION_SCHEMA_VERSION,
+            kind: ObservationKind::ApiSchema,
+            plan_hash: "a".repeat(64),
+            contract_hash: "b".repeat(64),
+            probe_id: format!("api-schema-{}", "c".repeat(64)),
+            method: ApiProbeMethod::Get,
+            url: "https://example.test/v1/users".into(),
+            status: 200,
+            media_type: Some("application/json".into()),
+            header_names: vec!["content-length".into(), "content-type".into()],
+            headers_truncated: false,
+            set_cookie_present: true,
+            declared_content_length: Some(87),
+            body_hash: "d".repeat(64),
+            body_bytes: 87,
+            body_truncated: false,
+            json_classification: JsonBodyClassification::ValidJson,
+            shape_node_count: shape.node_count()?,
+            json_shape: Some(shape),
+            shape_truncated: false,
+            max_response_bytes: 1024,
+            max_shape_nodes: 32,
+            max_shape_depth: API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH,
+            max_properties: API_SCHEMA_DEFAULT_MAX_PROPERTIES,
+            max_array_items: API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS,
+            request_provenance: ApiRequestProvenance {
+                resolved_addresses: vec!["192.0.2.1:443".into()],
+                request_count: 1,
+                redirect_followed: false,
+                proxy_used: false,
+                credentials_sent: false,
+                authorization_provenance: AuthorizationProvenance {
+                    authorized: true,
+                    explicit_override: false,
+                },
+            },
+        };
+        observation.validate()?;
+        let serialized = serde_json::to_string(&observation)?;
+        for forbidden in ["alice", "administrator", "fixture-secret"] {
+            assert!(!serialized.contains(forbidden));
+        }
+
+        let mut invalid = observation.clone();
+        invalid.shape_node_count += 1;
+        assert!(invalid.validate().is_err());
+        invalid = observation.clone();
+        invalid.request_provenance.redirect_followed = true;
+        assert!(invalid.validate().is_err());
+        invalid = observation.clone();
+        invalid.header_names.push("set-cookie".into());
+        assert!(invalid.validate().is_err());
+        invalid = observation.clone();
+        invalid.body_bytes = invalid.max_response_bytes + 1;
+        assert!(invalid.validate().is_err());
+        let mut credentialed = invalid.clone();
+        credentialed.body_bytes = 1;
+        credentialed.url = "https://user:password@example.test/v1/users".into();
+        assert!(credentialed.validate().is_err());
+        credentialed.url = "https://example.test/v1/users#fragment".into();
+        assert!(credentialed.validate().is_err());
+
+        let mut legal_media_type = observation.clone();
+        legal_media_type.media_type = Some("application/vnd.foo_bar!#$&^+*-json".into());
+        legal_media_type.validate()?;
+        legal_media_type.media_type = Some("application/vnd.foo%bar".into());
+        assert!(legal_media_type.validate().is_err());
+
+        let mut noncanonical_addresses = observation.clone();
+        noncanonical_addresses.request_provenance.resolved_addresses =
+            vec!["192.0.2.2:443".into(), "192.0.2.1:443".into()];
+        assert!(noncanonical_addresses.validate().is_err());
+
+        let mut truncated = observation;
+        truncated.body_bytes = truncated.max_response_bytes;
+        truncated.body_truncated = true;
+        truncated.json_classification = JsonBodyClassification::Truncated;
+        truncated.json_shape = None;
+        truncated.shape_node_count = 0;
+        truncated.shape_truncated = false;
+        truncated.validate()?;
+        truncated.json_classification = JsonBodyClassification::ValidJson;
+        assert!(truncated.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn api_schema_action_rejects_untyped_methods_and_unknown_fields() -> Result<()> {
+        let base = serde_json::json!({
+            "tool": "api_schema_probe",
+            "plan_hash": "a".repeat(64),
+            "contract_hash": "b".repeat(64),
+            "probe_id": format!("api-schema-{}", "c".repeat(64)),
+            "method": "POST",
+            "url": "https://example.test/v1",
+            "allowed_origins": ["https://example.test"],
+            "max_response_bytes": 1024,
+            "max_shape_nodes": 100,
+            "max_shape_depth": 24,
+            "max_properties": 2000,
+            "max_array_items": 1000
+        });
+        assert!(serde_json::from_value::<ToolAction>(base.clone()).is_err());
+        let mut valid = base;
+        valid["method"] = serde_json::json!("GET");
+        serde_json::from_value::<ToolAction>(valid.clone())?;
+        valid["credential"] = serde_json::json!("secret");
+        assert!(serde_json::from_value::<ToolAction>(valid).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn api_validation_run_config_requires_connected_engine_bound_plans() -> Result<()> {
+        let mut config = RunConfig {
+            schema_version: SCHEMA_VERSION,
+            mode: Mode::Blackbox,
+            targets: vec!["https://example.test/".into()],
+            scope: Scope::default(),
+            output_dir: PathBuf::from("fixture-output"),
+            source_root: None,
+            base_ref: None,
+            head_ref: None,
+            provider: None,
+            model_panel: None,
+            browser: None,
+            cloud_plan: None,
+            discovery_plan: None,
+            discovery_plan_hash: None,
+            api_validation_plan: Some(PathBuf::from("api-plan.json")),
+            api_validation_plan_hash: None,
+            chains: None,
+            playbooks: None,
+            max_steps: default_steps(),
+            max_model_tokens: default_model_tokens(),
+            authorized: true,
+            overrides: ExpertOverrides::default(),
+        };
+        assert!(config.validate().is_err());
+
+        config.discovery_plan = Some(PathBuf::from("discovery-plan.json"));
+        config.validate()?;
+        config.api_validation_plan_hash = Some("b".repeat(64));
+        assert!(config.validate().is_err());
+        config.discovery_plan_hash = Some("a".repeat(64));
+        config.validate()?;
+
+        config.mode = Mode::Whitebox;
+        assert!(config.validate().is_err());
+        config.mode = Mode::Blackbox;
+        config.api_validation_plan_hash = Some("B".repeat(64));
+        assert!(config.validate().is_err());
         Ok(())
     }
 }

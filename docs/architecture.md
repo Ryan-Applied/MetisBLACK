@@ -4,13 +4,14 @@ Dependencies point downward; no crate may depend on the application.
 
 ```text
 app → orchestrator → providers, model-panel, browser-runtime, cloud-runtime
-                  → chain-engine, tool-runtime, web-discovery, source-analysis, agent-library
+                  → chain-engine, tool-runtime, web-discovery, api-validation, source-analysis, agent-library
                   → world-model, reporting, integrations
 chain-engine → tool-runtime, policy, storage, domain
 browser-runtime → policy, storage, domain
 model-panel → providers, storage, domain
 tool-runtime → policy, evidence, storage
 web-discovery → storage
+api-validation → storage
 evidence → storage → domain
 policy, source-analysis, world-model, agent-library → domain
 reporting, integrations → domain, storage
@@ -36,8 +37,20 @@ scope, reads a bounded body, and observes one response without following a
 redirect. Plan, checkpoint and final artifact are hash-bound; finalization
 reconstructs every transition from receipt content hashes. Parsed HTML, robots,
 sitemaps, JavaScript hints and OpenAPI declarations describe observed, declared or
-omitted surface only. They do not execute scripts, submit forms, invoke APIs, or
-create a finding or causal edge.
+omitted surface only. Discovery itself does not execute scripts, submit forms,
+invoke APIs, or create a finding or causal edge.
+
+API response-contract validation is a separate pure state machine. A strict plan
+may select only concrete, input-free and anonymously accessible `GET`, `HEAD` or
+`OPTIONS` operations already declared by the verified discovery artifact. The
+orchestrator rebuilds the selected OpenAPI contract from its sealed source
+receipt, persists an exact pre-send intent, and hands a dedicated action to the
+runtime. That action pins checked DNS, disables proxies and redirects, sends no
+credentials, performs one request, and retains only status, normalized media
+type, a raw-prefix hash and a bounded value-free JSON shape. A finding requires
+a distinct replay receipt with the same exact status, media type and canonical
+structural violation. Unsupported, transient, malformed or truncated evidence is
+inconclusive; API observations are excluded from attack-chain facts.
 
 Findings hold receipt identifiers and typed proof predicates. Independent replay
 is performed by the harness; unsupported predicates remain NeedsReview. Source
@@ -58,8 +71,9 @@ Positive coverage is completed only after its finding is durably persisted.
 Immutable, content-addressed JSON records and atomic snapshots are the initial
 storage backend. An encrypted local vault stores secrets behind opaque references.
 Atomic writes sync file contents before rename and fsync the parent directory on
-Unix. Non-Unix builds retain atomic rename and file sync, but power-loss directory
-durability is not claimed.
+Unix. Receipt hard-link publication also fsyncs its directory before removing the
+pending name. Non-Unix builds retain atomic rename and file sync, but power-loss
+directory durability is not claimed.
 Output is redacted by default; an explicitly audited secret-redaction override can
 persist raw data. The local vault key is stored beside ciphertext under restrictive
 permissions: this protects accidental artifact disclosure, not a hostile local

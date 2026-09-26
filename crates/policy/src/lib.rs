@@ -258,6 +258,98 @@ impl Policy {
             } => {
                 self.open_redirect_probe_url(endpoint, parameter, canary)?;
             }
+            ToolAction::ApiSchemaProbe {
+                plan_hash,
+                contract_hash,
+                probe_id,
+                url,
+                allowed_origins,
+                max_response_bytes,
+                max_shape_nodes,
+                max_shape_depth,
+                max_properties,
+                max_array_items,
+                ..
+            } => {
+                ensure!(
+                    domain::is_canonical_sha256(plan_hash),
+                    "API schema plan hash must be canonical SHA-256"
+                );
+                ensure!(
+                    domain::is_canonical_sha256(contract_hash),
+                    "API schema contract hash must be canonical SHA-256"
+                );
+                domain::validate_api_probe_id(probe_id)?;
+                ensure!(
+                    !allowed_origins.is_empty() && allowed_origins.len() <= 256,
+                    "API schema probe requires 1..=256 exact allowed origins"
+                );
+                ensure!(
+                    (1..=domain::API_SCHEMA_HARD_MAX_RESPONSE_BYTES).contains(max_response_bytes),
+                    "API schema response bound exceeds the hard ceiling"
+                );
+                ensure!(
+                    (1..=domain::API_SCHEMA_HARD_MAX_SHAPE_NODES).contains(max_shape_nodes),
+                    "API schema shape bound exceeds the hard ceiling"
+                );
+                ensure!(
+                    (1..=domain::API_SCHEMA_HARD_MAX_SHAPE_DEPTH).contains(max_shape_depth),
+                    "API schema shape depth exceeds the hard ceiling"
+                );
+                ensure!(
+                    (1..=domain::API_SCHEMA_HARD_MAX_PROPERTIES).contains(max_properties),
+                    "API schema property bound exceeds the hard ceiling"
+                );
+                ensure!(
+                    (1..=domain::API_SCHEMA_HARD_MAX_ARRAY_ITEMS).contains(max_array_items),
+                    "API schema array bound exceeds the hard ceiling"
+                );
+                self.gate(
+                    *max_response_bytes <= domain::API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES
+                        && usize::try_from(*max_response_bytes)? <= self.scope.max_response_bytes,
+                    Control::DataSampling,
+                    "API schema response bound exceeds the central/default sampling limit",
+                )?;
+                self.gate(
+                    *max_shape_nodes <= domain::API_SCHEMA_DEFAULT_MAX_SHAPE_NODES
+                        && *max_shape_depth <= domain::API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH
+                        && *max_properties <= domain::API_SCHEMA_DEFAULT_MAX_PROPERTIES
+                        && *max_array_items <= domain::API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS,
+                    Control::DataSampling,
+                    "API schema structural bound exceeds the default sampling limit",
+                )?;
+                let target = self.check_url(url)?;
+                ensure!(
+                    target.as_str() == url
+                        && target.username().is_empty()
+                        && target.password().is_none(),
+                    "API schema URL must be canonical and credential-free"
+                );
+                let target_origin = target.origin().ascii_serialization();
+                let mut canonical = std::collections::BTreeSet::new();
+                for origin in allowed_origins {
+                    let parsed = Url::parse(origin).context("invalid API schema origin")?;
+                    ensure!(
+                        matches!(parsed.scheme(), "http" | "https")
+                            && parsed.host_str().is_some()
+                            && parsed.username().is_empty()
+                            && parsed.password().is_none()
+                            && parsed.path() == "/"
+                            && parsed.query().is_none()
+                            && parsed.fragment().is_none()
+                            && parsed.origin().ascii_serialization() == *origin,
+                        "API schema origins must be canonical exact HTTP(S) origins"
+                    );
+                    ensure!(
+                        canonical.insert(origin.clone()),
+                        "duplicate API schema origin"
+                    );
+                }
+                ensure!(
+                    canonical.contains(target_origin.as_str()),
+                    "API schema target is outside the action's exact allowed origins"
+                );
+            }
             ToolAction::HttpRequest { url, method, .. } => {
                 self.check_url(url)?;
                 if !["GET", "HEAD", "OPTIONS"].contains(&method.to_ascii_uppercase().as_str()) {
@@ -830,6 +922,222 @@ mod tests {
         )?;
         assert!(unrestricted.check_action(&outside).is_err());
         assert!(unrestricted.check_action(&oversized).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn api_schema_probe_enforces_identity_origin_scope_and_finite_caps() -> Result<()> {
+        let scope = scope_for_url("https://example.test/v1/users")?;
+        let action = ToolAction::ApiSchemaProbe {
+            plan_hash: "a".repeat(64),
+            contract_hash: "b".repeat(64),
+            probe_id: format!("api-schema-{}", "c".repeat(64)),
+            method: domain::ApiProbeMethod::Get,
+            url: "https://example.test/v1/users".into(),
+            allowed_origins: vec!["https://example.test".into()],
+            max_response_bytes: 1024,
+            max_shape_nodes: 100,
+            max_shape_depth: domain::API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH,
+            max_properties: domain::API_SCHEMA_DEFAULT_MAX_PROPERTIES,
+            max_array_items: domain::API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS,
+        };
+        Policy::new(scope.clone())?.check_action(&action)?;
+
+        let mut invalid_hash = action.clone();
+        if let ToolAction::ApiSchemaProbe { plan_hash, .. } = &mut invalid_hash {
+            *plan_hash = "A".repeat(64);
+        }
+        assert!(Policy::new(scope.clone())?
+            .check_action(&invalid_hash)
+            .is_err());
+
+        let mut noncanonical = action.clone();
+        if let ToolAction::ApiSchemaProbe { url, .. } = &mut noncanonical {
+            *url = "https://example.test".into();
+        }
+        assert!(Policy::new(scope.clone())?
+            .check_action(&noncanonical)
+            .is_err());
+
+        let mut wrong_origin = action.clone();
+        if let ToolAction::ApiSchemaProbe {
+            allowed_origins, ..
+        } = &mut wrong_origin
+        {
+            *allowed_origins = vec!["https://other.test".into()];
+        }
+        let unsafe_all = ExpertOverrides {
+            unsafe_all: true,
+            reason: "Explicit API policy boundary regression".into(),
+            actor: "test-operator".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        assert!(Policy::with_overrides(scope.clone(), unsafe_all.clone())?
+            .check_action(&wrong_origin)
+            .is_err());
+
+        for forbidden_url in [
+            "https://user:password@example.test/v1/users",
+            "https://example.test/v1/users#fragment",
+        ] {
+            let mut forbidden = action.clone();
+            if let ToolAction::ApiSchemaProbe { url, .. } = &mut forbidden {
+                *url = forbidden_url.into();
+            }
+            assert!(Policy::with_overrides(scope.clone(), unsafe_all.clone())?
+                .check_action(&forbidden)
+                .is_err());
+        }
+
+        let over_hard: [fn(&mut ToolAction); 5] = [
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_response_bytes, ..
+                } = candidate
+                {
+                    *max_response_bytes = domain::API_SCHEMA_HARD_MAX_RESPONSE_BYTES + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_shape_nodes, ..
+                } = candidate
+                {
+                    *max_shape_nodes = domain::API_SCHEMA_HARD_MAX_SHAPE_NODES + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_shape_depth, ..
+                } = candidate
+                {
+                    *max_shape_depth = domain::API_SCHEMA_HARD_MAX_SHAPE_DEPTH + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe { max_properties, .. } = candidate {
+                    *max_properties = domain::API_SCHEMA_HARD_MAX_PROPERTIES + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_array_items, ..
+                } = candidate
+                {
+                    *max_array_items = domain::API_SCHEMA_HARD_MAX_ARRAY_ITEMS + 1;
+                }
+            },
+        ];
+        for make_oversized in over_hard {
+            let mut oversized = action.clone();
+            make_oversized(&mut oversized);
+            assert!(Policy::with_overrides(scope.clone(), unsafe_all.clone())?
+                .check_action(&oversized)
+                .is_err());
+        }
+
+        let unrelated = ExpertOverrides {
+            controls: vec![Control::RequestBudget],
+            reason: "Unrelated override isolation regression".into(),
+            actor: "test-operator".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let sampling = ExpertOverrides {
+            controls: vec![Control::DataSampling],
+            reason: "Explicit larger API sample for regression".into(),
+            actor: "test-operator".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let over_default: [fn(&mut ToolAction); 5] = [
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_response_bytes, ..
+                } = candidate
+                {
+                    *max_response_bytes = domain::API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_shape_nodes, ..
+                } = candidate
+                {
+                    *max_shape_nodes = domain::API_SCHEMA_DEFAULT_MAX_SHAPE_NODES + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_shape_depth, ..
+                } = candidate
+                {
+                    *max_shape_depth = domain::API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe { max_properties, .. } = candidate {
+                    *max_properties = domain::API_SCHEMA_DEFAULT_MAX_PROPERTIES + 1;
+                }
+            },
+            |candidate| {
+                if let ToolAction::ApiSchemaProbe {
+                    max_array_items, ..
+                } = candidate
+                {
+                    *max_array_items = domain::API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS + 1;
+                }
+            },
+        ];
+        for make_sampled in over_default {
+            let mut sampled = action.clone();
+            make_sampled(&mut sampled);
+            assert!(Policy::with_overrides(scope.clone(), unrelated.clone())?
+                .check_action(&sampled)
+                .is_err());
+            Policy::with_overrides(scope.clone(), sampling.clone())?.check_action(&sampled)?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn api_schema_secret_queries_require_both_secret_overrides() -> Result<()> {
+        let scope = scope_for_url("https://example.test/v1")?;
+        let action = ToolAction::ApiSchemaProbe {
+            plan_hash: "a".repeat(64),
+            contract_hash: "b".repeat(64),
+            probe_id: format!("api-schema-{}", "c".repeat(64)),
+            method: domain::ApiProbeMethod::Head,
+            url: "https://example.test/v1?to%6ben=fixture-secret".into(),
+            allowed_origins: vec!["https://example.test".into()],
+            max_response_bytes: 1024,
+            max_shape_nodes: 100,
+            max_shape_depth: domain::API_SCHEMA_DEFAULT_MAX_SHAPE_DEPTH,
+            max_properties: domain::API_SCHEMA_DEFAULT_MAX_PROPERTIES,
+            max_array_items: domain::API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS,
+        };
+        assert!(Policy::new(scope.clone())?.check_action(&action).is_err());
+        for control in [Control::SecretExposure, Control::SecretRedaction] {
+            let one = ExpertOverrides {
+                controls: vec![control],
+                reason: "Single secret override must remain isolated".into(),
+                actor: "test-operator".into(),
+                acknowledged: true,
+                ..Default::default()
+            };
+            assert!(Policy::with_overrides(scope.clone(), one)?
+                .check_action(&action)
+                .is_err());
+        }
+        let both = ExpertOverrides {
+            controls: vec![Control::SecretExposure, Control::SecretRedaction],
+            reason: "Explicit secret-bearing immutable URL lineage".into(),
+            actor: "test-operator".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        Policy::with_overrides(scope, both)?.check_action(&action)?;
         Ok(())
     }
 }

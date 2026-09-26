@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::path::PathBuf;
 use storage::hash;
 use web_discovery::{
     DiscoveryArtifact, DiscoveryBounds, DiscoveryCheckpoint, DiscoveryObservation, DiscoveryPlan,
@@ -54,6 +55,19 @@ fn contracts_reject_unknown_fields_and_unknown_schema_versions() {
     let mut artifact = serde_json::to_value(session.artifact().unwrap()).unwrap();
     artifact["future_field"] = json!("not silently accepted");
     assert!(serde_json::from_value::<DiscoveryArtifact>(artifact).is_err());
+}
+
+#[test]
+fn shipped_api_plan_is_fingerprint_bound_to_shipped_discovery_plan() {
+    let examples = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+    let discovery: DiscoveryPlan =
+        serde_json::from_slice(&std::fs::read(examples.join("web-discovery-plan.json")).unwrap())
+            .unwrap();
+    let api: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(examples.join("api-validation-plan.json")).unwrap())
+            .unwrap();
+    let expected = api["selectors"][0]["discovery_plan_hash"].as_str().unwrap();
+    assert_eq!(discovery.fingerprint().unwrap(), expected);
 }
 
 #[test]

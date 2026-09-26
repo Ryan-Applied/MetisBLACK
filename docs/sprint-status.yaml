@@ -1,8 +1,8 @@
 project: "MetisBLACK"
 program: "P0-P2 production parity"
 last_updated: "2026-09-27T00:00:00+10:00"
-sprint: 1
-objective: "Establish reusable typed browser-role, source-flow, cloud-IAM, web-discovery, and narrow web-validation foundations"
+sprint: 2
+objective: "Add receipt-backed active API contract validation without weakening scope, replay, or evidence guarantees"
 stories:
   E01-S01:
     file: "docs/stories/story-E01-S01.md"
@@ -24,6 +24,10 @@ stories:
     file: "docs/stories/story-E04-S02.md"
     status: "done"
     owner: "web-validation swarm"
+  E04-S03:
+    file: "docs/stories/story-E04-S03.md"
+    status: "in-progress"
+    owner: "api-validation swarm"
   E12-S01:
     file: "docs/stories/story-E12-S01.md"
     status: "done"

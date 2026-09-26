@@ -72,20 +72,39 @@ fn create_private(path: &Path) -> Result<std::fs::File> {
     Ok(o.open(path)?)
 }
 
-#[cfg(unix)]
-fn sync_parent_directory(path: &Path) -> Result<()> {
-    fs::File::open(path)
-        .with_context(|| format!("open parent directory for sync: {}", path.display()))?
-        .sync_all()
-        .with_context(|| format!("sync parent directory: {}", path.display()))
+/// The durability guarantee obtained by [`sync_directory`].
+///
+/// Rust does not expose a portable way to open and sync directory handles on
+/// every supported platform, so callers can distinguish a durable Unix sync
+/// from the honest non-Unix fallback.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DirectorySyncOutcome {
+    Synced,
+    Unsupported,
 }
 
-#[cfg(not(unix))]
-fn sync_parent_directory(_path: &Path) -> Result<()> {
-    // Rust's portable File API cannot open directory handles on every
-    // platform. The file contents are still synced before the atomic rename;
-    // platforms with portable directory handles additionally sync the parent.
-    Ok(())
+/// Sync a directory after publishing, renaming, or removing one of its entries.
+///
+/// Unix directory handles are synced and failures are returned. On other
+/// platforms the operation reports [`DirectorySyncOutcome::Unsupported`]; it
+/// does not claim that the directory entry is power-loss durable.
+pub fn sync_directory(path: &Path) -> Result<DirectorySyncOutcome> {
+    #[cfg(unix)]
+    {
+        fs::File::open(path)
+            .with_context(|| format!("open parent directory for sync: {}", path.display()))?
+            .sync_all()
+            .with_context(|| format!("sync parent directory: {}", path.display()))?;
+        Ok(DirectorySyncOutcome::Synced)
+    }
+    #[cfg(not(unix))]
+    {
+        // The producer remains responsible for syncing file contents before
+        // publication. Rust's portable API cannot sync directory handles on
+        // every platform, so no directory-entry durability is claimed here.
+        let _ = path;
+        Ok(DirectorySyncOutcome::Unsupported)
+    }
 }
 
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
@@ -103,7 +122,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
         fs::rename(&tmp, path)?;
-        sync_parent_directory(parent)?;
+        let _directory_sync = sync_directory(parent)?;
         Ok(())
     })();
     if result.is_err() {
@@ -456,6 +475,29 @@ mod tests {
                 .map(|entry| !entry.file_name().to_string_lossy().starts_with(".write-"))
                 .unwrap_or(false)
         }));
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_sync_reports_a_real_unix_sync() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        assert_eq!(
+            sync_directory(directory.path())?,
+            DirectorySyncOutcome::Synced
+        );
+        assert!(sync_directory(&directory.path().join("missing")).is_err());
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    #[test]
+    fn directory_sync_reports_the_portable_limit() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        assert_eq!(
+            sync_directory(directory.path())?,
+            DirectorySyncOutcome::Unsupported
+        );
         Ok(())
     }
 }

@@ -14,7 +14,7 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 ```
 
-The current suite passed **197 tests**, with no failed or ignored tests. Coverage
+The current suite passed **271 tests**, with no failed or ignored tests. Coverage
 includes the exhaustive 32-control registry (default enforcement, exact override,
 unrelated-control isolation and unsafe-all), native provider HTTP tool calling,
 real tool receipts, independent replay, recon/specialist/reviewer/refuter scheduling,
@@ -49,6 +49,15 @@ observations, fresh-canary replay/retest, exact intent receipt binding, positive
 finding crash recovery, and explicit failed-stage one-shot retry. These paths use
 owned loopback fixtures only and do not claim broad web exploitation coverage.
 
+The E04-S03 local acceptance adds receipt-derived OpenAPI v2/v3 JSON/YAML response
+contracts for explicitly selected anonymous input-free `GET`, `HEAD` and `OPTIONS`
+operations. It covers strict selection and URL materialization, local-reference and
+schema ceilings, pinned-DNS/no-proxy/no-redirect acquisition, value-free response
+shapes, durable primary/replay/retest intents, exact receipt recovery, tamper
+rejection, explicit one-shot retry, exact status/media/violation replay, and
+normal-report lineage and omission records. These tests use owned loopback fixtures;
+they do not certify interoperability with a public API or real framework.
+
 The documented local demo completed at `runs/verified-demo`: two low-severity
 empirically confirmed missing-header observations, linked independent replay
 receipts, and Markdown/HTML/JSON/SARIF reports. This directory is ignored by Git.
@@ -61,7 +70,8 @@ Windows in addition to the strict quality and dependency-policy jobs. GitHub
 Actions run
 [`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
 passed all five jobs from commit `8a1f693` using the declared Rust 1.88 MSRV,
-including the E04 foundation implementation documented above.
+including the E04-S01/S02 foundation implementation. E04-S03 has passed the local
+matrix above; final-head CI is pending and is not claimed by that earlier run.
 
 Not executed locally: `cargo deny check` (cargo-deny is not installed), live
 provider authentication, real provider-cloud accounts, a real WebDriver,

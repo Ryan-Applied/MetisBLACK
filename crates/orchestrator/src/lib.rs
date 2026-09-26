@@ -1,5 +1,12 @@
 //! Shared application service: CLI, REPL and TUI invoke the same engine.
 use anyhow::{ensure, Context, Result};
+use api_validation::{
+    classify_response, materialize_request_url, normalize_openapi, violation_hash,
+    ActualResponseObservation, ApiValidationArtifact, ApiValidationPlan, ApiValidationSession,
+    Conformance, JsonShape as ValidationJsonShape, NormalizedOpenApi, OpenApiDocumentInput,
+    OperationContract, OperationSelector, ReceiptLineage as ApiReceiptLineage,
+    ReplayClassification, SafeMethod, API_VALIDATION_SCHEMA_VERSION,
+};
 use browser_runtime::{
     AuthenticatedBrowserWorkflow, AuthenticatedBrowserWorkflowExecutor,
     AuthenticatedWorkflowStatus, BrowserKind, BrowserObservation, BrowserPlan, BrowserPlanExecutor,
@@ -173,6 +180,118 @@ fn configured_discovery_plan(config: &RunConfig) -> Result<Option<DiscoveryPlan>
     Ok(Some(plan))
 }
 
+fn bind_api_validation_plan(config: &mut RunConfig) -> Result<()> {
+    let Some(source_path) = config.api_validation_plan.clone() else {
+        config.api_validation_plan_hash = None;
+        return Ok(());
+    };
+    ensure!(
+        config.api_validation_plan_hash.is_none(),
+        "api_validation_plan_hash is engine-managed"
+    );
+    ensure!(
+        matches!(config.mode, Mode::Blackbox | Mode::Greybox),
+        "API validation plans require black-box or grey-box mode"
+    );
+    let discovery_hash = config
+        .discovery_plan_hash
+        .as_deref()
+        .context("API validation requires a bound web discovery plan")?;
+    let discovery_plan = configured_discovery_plan(config)?
+        .context("API validation requires a configured web discovery plan")?;
+    let plan: ApiValidationPlan = read_json(&source_path)?;
+    let plan = plan.canonicalized()?;
+    ensure!(
+        !api_validation_bounds_exceed_default(&plan)
+            || config.overrides.disables(Control::DataSampling),
+        "API validation bounds above defaults require an audited data_sampling override"
+    );
+    ensure!(
+        plan.selectors
+            .iter()
+            .all(|selector| selector.discovery_plan_hash == discovery_hash),
+        "every API selector must bind the configured discovery plan hash"
+    );
+    let policy = Policy::with_overrides(config.scope.clone(), config.overrides.clone())?;
+    for selector in &plan.selectors {
+        ensure!(
+            url_origin(&selector.openapi_source_url)
+                .is_some_and(|origin| discovery_plan.allowed_origins.contains(&origin)),
+            "API selector source is outside the discovery origin boundary"
+        );
+        // Validate every operator-supplied source URL before the plan is
+        // copied into immutable run state (including secret-query policy).
+        policy.check_action(&ToolAction::HttpGet {
+            url: selector.openapi_source_url.clone(),
+        })?;
+    }
+    let plan_hash = plan.fingerprint()?;
+    let bound_path = config
+        .output_dir
+        .join("configured-api-validation-plan.json");
+    ensure!(
+        !bound_path.exists(),
+        "run directory already contains a bound API validation plan"
+    );
+    write_json(&bound_path, &plan)?;
+    config.api_validation_plan = Some(bound_path);
+    config.api_validation_plan_hash = Some(plan_hash);
+    config.validate()
+}
+
+fn configured_api_validation_plan(config: &RunConfig) -> Result<Option<ApiValidationPlan>> {
+    let Some(path) = &config.api_validation_plan else {
+        ensure!(
+            config.api_validation_plan_hash.is_none(),
+            "API validation plan hash exists without a plan"
+        );
+        return Ok(None);
+    };
+    let expected = config
+        .api_validation_plan_hash
+        .as_deref()
+        .context("configured API validation plan is not bound to a canonical hash")?;
+    let plan: ApiValidationPlan = read_json(path)?;
+    let plan = plan.canonicalized()?;
+    ensure!(
+        plan.fingerprint()? == expected,
+        "bound API validation plan fingerprint changed"
+    );
+    ensure!(
+        !api_validation_bounds_exceed_default(&plan)
+            || config.overrides.disables(Control::DataSampling),
+        "bound API validation bounds require the audited data_sampling override"
+    );
+    let discovery_hash = config
+        .discovery_plan_hash
+        .as_deref()
+        .context("API validation plan lost its discovery plan binding")?;
+    ensure!(
+        plan.selectors
+            .iter()
+            .all(|selector| selector.discovery_plan_hash == discovery_hash),
+        "bound API validation plan no longer matches web discovery"
+    );
+    Ok(Some(plan))
+}
+
+fn api_validation_bounds_exceed_default(plan: &ApiValidationPlan) -> bool {
+    let defaults = api_validation::ValidationBounds::default();
+    let bounds = &plan.bounds;
+    bounds.max_selectors > defaults.max_selectors
+        || bounds.max_document_bytes > defaults.max_document_bytes
+        || bounds.max_response_bytes > defaults.max_response_bytes
+        || bounds.max_ref_depth > defaults.max_ref_depth
+        || bounds.max_ref_nodes > defaults.max_ref_nodes
+        || bounds.max_schema_depth > defaults.max_schema_depth
+        || bounds.max_schema_nodes > defaults.max_schema_nodes
+        || bounds.max_properties > defaults.max_properties
+        || bounds.max_shape_depth > defaults.max_shape_depth
+        || bounds.max_shape_nodes > defaults.max_shape_nodes
+        || bounds.max_array_items > defaults.max_array_items
+        || bounds.max_results > defaults.max_results
+}
+
 impl Engine {
     pub fn new(mut config: RunConfig) -> Result<Self> {
         config.validate()?;
@@ -225,6 +344,7 @@ impl Engine {
             "run directory already contains a run; use resume or a new directory"
         );
         bind_discovery_plan(&mut config)?;
+        bind_api_validation_plan(&mut config)?;
         let id = random_id("run")?;
         let redactor = Redactor::with_override(&config.overrides);
         let evidence =
@@ -288,6 +408,23 @@ impl Engine {
                 "resume discovery plan must use the run-bound canonical copy"
             );
             configured_discovery_plan(&snapshot.config)?;
+        }
+        if snapshot.config.api_validation_plan.is_some() {
+            let expected_path = root.join("configured-api-validation-plan.json");
+            ensure!(
+                snapshot
+                    .config
+                    .api_validation_plan
+                    .as_deref()
+                    .and_then(|path| path.canonicalize().ok())
+                    .is_some_and(|path| {
+                        expected_path
+                            .canonicalize()
+                            .is_ok_and(|expected| path == expected)
+                    }),
+                "resume API validation plan must use the run-bound canonical copy"
+            );
+            configured_api_validation_plan(&snapshot.config)?;
         }
         ensure!(
             snapshot.status != RunStatus::Complete,
@@ -581,8 +718,13 @@ impl Engine {
         let mode = self.snapshot.config.mode;
         if matches!(mode, Mode::Blackbox | Mode::Greybox) {
             if let Some(plan) = configured_discovery_plan(&self.snapshot.config)? {
-                if self.run_web_discovery(plan).await?.is_none() {
+                let Some(discovery) = self.run_web_discovery(plan.clone()).await? else {
                     return Ok(());
+                };
+                if let Some(api_plan) = configured_api_validation_plan(&self.snapshot.config)? {
+                    if !self.run_api_validation(api_plan, &plan, &discovery).await? {
+                        return Ok(());
+                    }
                 }
             }
         }
@@ -1272,7 +1414,7 @@ impl Engine {
         let mut facts = BTreeSet::new();
         let mut capabilities = BTreeSet::new();
         for receipt in &receipts {
-            if !receipt.output.successful {
+            if !receipt.output.successful || !receipt_contributes_chain_surface(receipt) {
                 continue;
             }
             match &receipt.output.action {
@@ -1287,6 +1429,9 @@ impl Engine {
                     capabilities.insert("http".into());
                     facts.insert("http_seen".into());
                 }
+                ToolAction::ApiSchemaProbe { .. } => unreachable!(
+                    "API response-contract observations are excluded from attack-chain inputs"
+                ),
                 ToolAction::SourceRead { path, .. } => {
                     capabilities.insert("source-read".into());
                     facts.insert("source_manifest_seen".into());
@@ -1783,6 +1928,717 @@ impl Engine {
             "discovery artifact differs from independent receipt replay"
         );
         Ok(())
+    }
+
+    async fn run_api_validation(
+        &mut self,
+        plan: ApiValidationPlan,
+        discovery_plan: &DiscoveryPlan,
+        discovery: &DiscoveryArtifact,
+    ) -> Result<bool> {
+        let plan = plan.canonicalized()?;
+        let plan_hash = plan.fingerprint()?;
+        ensure!(
+            self.snapshot.config.api_validation_plan_hash.as_deref() == Some(&plan_hash),
+            "API validation plan is not the run-bound plan"
+        );
+        ensure!(
+            plan.selectors.iter().all(|selector| {
+                selector.discovery_plan_hash == discovery.plan_hash
+                    && selector.discovery_plan_hash
+                        == discovery_plan.fingerprint().unwrap_or_default()
+            }),
+            "API validation selectors do not bind the verified discovery artifact"
+        );
+        self.verify_discovery_artifact(discovery_plan, discovery)?;
+
+        let root = self.snapshot.config.output_dir.join("api-validation");
+        let directory = root.join(&plan_hash[..24]);
+        let intents_dir = directory.join("intents");
+        secure_dir(&root)?;
+        secure_dir(&directory)?;
+        secure_dir(&intents_dir)?;
+        let plan_path = directory.join("plan.json");
+        let contracts_path = directory.join("contracts.json");
+        let checkpoint_path = directory.join("checkpoint.json");
+        let artifact_path = directory.join("artifact.json");
+        let stage_path = directory.join("stage.json");
+        let failure_path = directory.join("failure.json");
+        let stage = stage_key("api-validation", &plan)?;
+        let failed_stage = format!("failed:{stage}");
+        let retry_pending = self.stage_retry_pending(&failed_stage);
+        ensure!(
+            !self.snapshot.completed_targets.contains(&failed_stage) || retry_pending,
+            "API contract normalization previously failed; resume requires --retry-failed-stages"
+        );
+        if retry_pending {
+            self.consume_stage_retry(&failed_stage)?;
+        }
+
+        if plan_path.exists() {
+            let persisted: ApiValidationPlan = read_json(&plan_path)?;
+            ensure!(persisted == plan, "persisted API validation plan changed");
+        } else {
+            write_json(&plan_path, &plan)?;
+        }
+
+        let rebuilt_contracts = match self.api_contracts_from_discovery(
+            &plan,
+            discovery_plan,
+            discovery,
+        ) {
+            Ok(contracts) => contracts,
+            Err(error) => {
+                let reason = Redactor::with_override(&self.snapshot.config.overrides)
+                    .text(&error.to_string());
+                if !self.snapshot.completed_targets.contains(&failed_stage) {
+                    self.snapshot.completed_targets.push(failed_stage.clone());
+                }
+                self.snapshot.limitations.push(format!(
+                    "API response-contract coverage is incomplete for {stage}: {reason}. No negative coverage claim was made."
+                ));
+                write_json(
+                    &failure_path,
+                    &json!({
+                        "schema_version":API_VALIDATION_SCHEMA_VERSION,
+                        "stage_key":stage,
+                        "plan_hash":plan_hash,
+                        "phase":"contract_normalization",
+                        "reason":reason,
+                        "coverage_claimed":false
+                    }),
+                )?;
+                self.checkpoint()?;
+                return Err(error).context("API contract normalization failed");
+            }
+        };
+        let contracts: Vec<NormalizedOpenApi> = if contracts_path.exists() {
+            let persisted = read_json(&contracts_path)?;
+            ensure!(
+                persisted == rebuilt_contracts,
+                "persisted API contracts differ from sealed discovery receipts"
+            );
+            persisted
+        } else {
+            write_json(&contracts_path, &rebuilt_contracts)?;
+            rebuilt_contracts
+        };
+
+        if self.snapshot.completed_targets.contains(&stage) {
+            let artifact: ApiValidationArtifact = read_json(&artifact_path)
+                .context("completed API validation stage is missing its artifact")?;
+            self.verify_api_validation_artifact(&plan, discovery_plan, discovery, &artifact)?;
+            let record: ApiValidationStageRecord = read_json(&stage_path)
+                .context("completed API validation stage is missing its record")?;
+            ensure!(
+                record.schema_version == API_VALIDATION_SCHEMA_VERSION
+                    && record.stage_key == stage
+                    && record.plan_hash == plan_hash
+                    && record.artifact_hash == artifact.canonical_hash()?
+                    && record.complete,
+                "API validation stage record does not match its verified artifact"
+            );
+            return Ok(true);
+        }
+
+        let mut session = if checkpoint_path.exists() {
+            ApiValidationSession::resume(plan.clone(), contracts, read_json(&checkpoint_path)?)?
+        } else {
+            ApiValidationSession::start(plan.clone(), contracts)?
+        };
+
+        loop {
+            if self.should_stop()? {
+                write_json(&checkpoint_path, session.checkpoint())?;
+                return Ok(false);
+            }
+            // A primary violation is checkpointed before its independent
+            // replay. Always close that durable crash window before taking a
+            // new primary selector.
+            let replay_pending = session
+                .checkpoint()
+                .records
+                .iter()
+                .find(|record| {
+                    matches!(record.result, Conformance::Violating { .. })
+                        && !session
+                            .checkpoint()
+                            .replay_comparisons
+                            .iter()
+                            .any(|comparison| comparison.selector == record.observation.selector)
+                })
+                .map(|record| record.observation.selector.clone());
+            if let Some(selector) = replay_pending {
+                let operation = session
+                    .operation_contract(&selector)
+                    .context("replay selector has no normalized contract")?
+                    .clone();
+                let replay_action = api_probe_action(&plan, discovery_plan, &operation)?;
+                let replay = self
+                    .execute_api_probe(
+                        &stage,
+                        ApiProbePhase::Replay,
+                        &selector,
+                        replay_action,
+                        &intents_dir,
+                    )
+                    .await?;
+                let observation = api_observation_from_receipt(&selector, &operation, &replay)?;
+                session.apply_replay_observation(observation)?;
+                write_json(&checkpoint_path, session.checkpoint())?;
+                if self.should_stop()? {
+                    return Ok(false);
+                }
+                continue;
+            }
+
+            let Some(selector) = session.pending().first().cloned() else {
+                break;
+            };
+            let operation = session
+                .operation_contract(&selector)
+                .context("API selector has no normalized contract")?
+                .clone();
+            let action = api_probe_action(&plan, discovery_plan, &operation)?;
+            let primary = self
+                .execute_api_probe(
+                    &stage,
+                    ApiProbePhase::Primary,
+                    &selector,
+                    action,
+                    &intents_dir,
+                )
+                .await?;
+            let observation = api_observation_from_receipt(&selector, &operation, &primary)?;
+            session.apply_observation(observation)?;
+            write_json(&checkpoint_path, session.checkpoint())?;
+            if self.should_stop()? {
+                return Ok(false);
+            }
+        }
+
+        let artifact = session.artifact()?;
+        self.verify_api_validation_artifact(&plan, discovery_plan, discovery, &artifact)?;
+        write_json(&artifact_path, &artifact)?;
+        // Findings are checkpointed before the stage is marked complete. A
+        // restart in this window deterministically replays this idempotent step.
+        self.record_api_validation_coverage(&artifact)?;
+        self.record_api_validation_findings(&artifact)?;
+        let artifact_hash = artifact.canonical_hash()?;
+        write_json(
+            &stage_path,
+            &ApiValidationStageRecord {
+                schema_version: API_VALIDATION_SCHEMA_VERSION,
+                stage_key: stage.clone(),
+                plan_hash: plan_hash.clone(),
+                artifact_hash: artifact_hash.clone(),
+                complete: true,
+            },
+        )?;
+        self.snapshot.decisions.push(json!({
+            "action":"api_response_contract_validation",
+            "plan_id":plan.plan_id,
+            "artifact":artifact_path.strip_prefix(&self.snapshot.config.output_dir)?.to_string_lossy(),
+            "artifact_hash":artifact_hash,
+            "selectors":plan.selectors.len(),
+            "replays":artifact.replay_comparisons.len(),
+            "complete":true
+        }));
+        self.snapshot.completed_targets.push(stage);
+        self.checkpoint()?;
+        Ok(true)
+    }
+
+    fn api_contracts_from_discovery(
+        &self,
+        plan: &ApiValidationPlan,
+        discovery_plan: &DiscoveryPlan,
+        discovery: &DiscoveryArtifact,
+    ) -> Result<Vec<NormalizedOpenApi>> {
+        let mut sources = BTreeMap::<String, Vec<&OperationSelector>>::new();
+        for selector in &plan.selectors {
+            let matching = discovery
+                .operations
+                .iter()
+                .filter(|operation| {
+                    operation.source_url == selector.openapi_source_url
+                        && operation
+                            .method
+                            .eq_ignore_ascii_case(selector.method.as_lowercase())
+                        && operation.path_template == selector.path
+                        && operation.operation_id == selector.operation_id
+                })
+                .collect::<Vec<_>>();
+            ensure!(
+                matching.len() == 1,
+                "API selector must match exactly one discovered declared operation"
+            );
+            let declared = matching[0];
+            ensure!(
+                declared.state == EvidenceState::Declared,
+                "API selector does not reference a declared operation"
+            );
+            let resolved = declared
+                .resolved_url_template
+                .as_deref()
+                .context("selected OpenAPI operation has no resolvable URL")?;
+            ensure!(
+                !resolved.contains('{') && !resolved.contains('}'),
+                "parameterized OpenAPI operations are not executed implicitly"
+            );
+            ensure!(
+                url_origin(resolved)
+                    .is_some_and(|origin| discovery_plan.allowed_origins.contains(&origin)),
+                "selected OpenAPI operation resolves outside allowed origins"
+            );
+            let web_discovery::SourceLineage::Receipt {
+                receipt_id,
+                receipt_content_hash,
+                body_hash,
+                source_url,
+            } = &declared.lineage
+            else {
+                anyhow::bail!("selected OpenAPI operation lacks receipt-derived lineage")
+            };
+            ensure!(
+                source_url == &selector.openapi_source_url,
+                "selected OpenAPI operation source lineage mismatch"
+            );
+            let replay = discovery
+                .reverification_inputs
+                .iter()
+                .find(|input| {
+                    input.effective_url == selector.openapi_source_url
+                        && input.receipt.receipt_id == *receipt_id
+                })
+                .context("OpenAPI source is absent from discovery replay inputs")?;
+            ensure!(
+                !replay.truncated
+                    && replay.body_hash == *body_hash
+                    && replay.receipt.receipt_content_hash == *receipt_content_hash,
+                "OpenAPI source lineage is truncated or inconsistent"
+            );
+            sources
+                .entry(selector.openapi_source_url.clone())
+                .or_default()
+                .push(selector);
+        }
+
+        let mut contracts = Vec::with_capacity(sources.len());
+        for (source_url, _) in sources {
+            let replay = discovery
+                .reverification_inputs
+                .iter()
+                .find(|input| input.effective_url == source_url)
+                .context("OpenAPI source replay input missing")?;
+            let receipt = self.runtime.evidence.get(&replay.receipt.receipt_id)?;
+            ensure!(
+                receipt.content_hash == replay.receipt.receipt_content_hash
+                    && receipt.actor == "web-discovery",
+                "OpenAPI source receipt lineage mismatch"
+            );
+            let body = receipt.output.data["body"]
+                .as_str()
+                .context("OpenAPI source receipt has no body")?;
+            ensure!(
+                !receipt.output.truncated && hash(body.as_bytes()) == replay.body_hash,
+                "OpenAPI source body is truncated or does not match discovery"
+            );
+            let normalized = normalize_openapi(
+                OpenApiDocumentInput {
+                    source_url: &source_url,
+                    document: body.as_bytes(),
+                    receipt: ApiReceiptLineage {
+                        receipt_id: receipt.id,
+                        receipt_content_hash: receipt.content_hash,
+                    },
+                },
+                plan,
+            )?;
+            for operation in &normalized.operations {
+                let declared = discovery
+                    .operations
+                    .iter()
+                    .find(|entry| {
+                        entry.source_url == operation.selector.openapi_source_url
+                            && entry
+                                .method
+                                .eq_ignore_ascii_case(operation.selector.method.as_lowercase())
+                            && entry.path_template == operation.selector.path
+                            && entry.operation_id == operation.selector.operation_id
+                    })
+                    .context("normalized operation lost discovery declaration")?;
+                ensure!(
+                    declared.resolved_url_template.as_deref()
+                        == Some(api_probe_url(operation)?.as_str()),
+                    "normalized API execution URL differs from discovered declaration"
+                );
+            }
+            contracts.push(normalized);
+        }
+        contracts.sort_by(|left, right| left.source_url.cmp(&right.source_url));
+        Ok(contracts)
+    }
+
+    async fn execute_api_probe(
+        &mut self,
+        validation_stage: &str,
+        phase: ApiProbePhase,
+        selector: &OperationSelector,
+        action: ToolAction,
+        intents_dir: &Path,
+    ) -> Result<Receipt> {
+        self.runtime.policy.check_action(&action)?;
+        let operation_stage = stage_key(
+            "api-schema-probe",
+            &(validation_stage, phase, selector, &action),
+        )?;
+        let failed_stage = format!("failed:{operation_stage}");
+        let retry_pending = self.stage_retry_pending(&failed_stage);
+        ensure!(
+            !self.snapshot.completed_targets.contains(&failed_stage) || retry_pending,
+            "API probe stage previously failed; resume requires --retry-failed-stages"
+        );
+        let intent_path =
+            intents_dir.join(format!("intent-{}.json", hash(operation_stage.as_bytes())));
+        let actor = phase.actor();
+        let receipt = if retry_pending {
+            self.consume_stage_retry(&failed_stage)?;
+            let mut intent = ApiProbeOperationIntent::pending(
+                operation_stage.clone(),
+                phase,
+                selector.clone(),
+                action.clone(),
+            );
+            write_json(&intent_path, &intent)?;
+            let receipt = self.tool(actor, action).await?;
+            intent.resolve(&receipt);
+            write_json(&intent_path, &intent)?;
+            receipt
+        } else if intent_path.exists() {
+            let mut intent: ApiProbeOperationIntent = read_json(&intent_path)?;
+            intent.validate(&operation_stage, phase, selector, &action)?;
+            let receipt = match intent.state {
+                DiscoveryIntentState::Receipted | DiscoveryIntentState::Indeterminate => {
+                    let receipt = self.runtime.evidence.get(
+                        intent
+                            .receipt_id
+                            .as_deref()
+                            .context("resolved API probe intent lacks a receipt")?,
+                    )?;
+                    ensure!(
+                        receipt.actor == actor && receipt.output.action == intent.action,
+                        "resolved API probe intent does not bind its exact receipt"
+                    );
+                    receipt
+                }
+                DiscoveryIntentState::Pending => {
+                    if let Some(receipt) = latest_exact_receipt(
+                        &self.runtime.evidence.manifest()?,
+                        actor,
+                        &intent.action,
+                    ) {
+                        intent.resolve(&receipt);
+                        receipt
+                    } else {
+                        let receipt = self.capture_external(
+                            actor,
+                            action.clone(),
+                            json!({
+                                "error":"indeterminate_after_crash: a durable API operation intent exists without a sealed receipt; the request was not repeated",
+                                "indeterminate_after_crash":true
+                            }),
+                            false,
+                            false,
+                        )?;
+                        intent.state = DiscoveryIntentState::Indeterminate;
+                        intent.receipt_id = Some(receipt.id.clone());
+                        receipt
+                    }
+                }
+            };
+            write_json(&intent_path, &intent)?;
+            receipt
+        } else if let Some(receipt) =
+            latest_exact_receipt(&self.runtime.evidence.manifest()?, actor, &action)
+        {
+            let mut intent = ApiProbeOperationIntent::pending(
+                operation_stage.clone(),
+                phase,
+                selector.clone(),
+                action,
+            );
+            intent.resolve(&receipt);
+            write_json(&intent_path, &intent)?;
+            receipt
+        } else {
+            let mut intent = ApiProbeOperationIntent::pending(
+                operation_stage.clone(),
+                phase,
+                selector.clone(),
+                action.clone(),
+            );
+            write_json(&intent_path, &intent)?;
+            let receipt = self.tool(actor, action).await?;
+            intent.resolve(&receipt);
+            write_json(&intent_path, &intent)?;
+            receipt
+        };
+        if !self.snapshot.receipt_ids.contains(&receipt.id) {
+            self.snapshot.receipt_ids.push(receipt.id.clone());
+            self.checkpoint()?;
+        }
+        if !receipt.output.successful {
+            if !self.snapshot.completed_targets.contains(&failed_stage) {
+                self.snapshot.completed_targets.push(failed_stage.clone());
+            }
+            self.snapshot.limitations.push(format!(
+                "API response-contract validation is incomplete for {operation_stage}; receipt {} is unsuccessful. No negative coverage claim was made.",
+                receipt.id
+            ));
+            self.checkpoint()?;
+            anyhow::bail!(
+                "API schema probe was inconclusive; inspect receipt {} and explicitly retry the failed stage ({})",
+                receipt.id,
+                receipt.output.data["error"].as_str().unwrap_or("unsuccessful typed operation")
+            );
+        }
+        Ok(receipt)
+    }
+
+    fn verify_api_validation_artifact(
+        &self,
+        plan: &ApiValidationPlan,
+        discovery_plan: &DiscoveryPlan,
+        discovery: &DiscoveryArtifact,
+        artifact: &ApiValidationArtifact,
+    ) -> Result<()> {
+        artifact.verify(plan)?;
+        ensure!(
+            artifact.contracts
+                == self.api_contracts_from_discovery(plan, discovery_plan, discovery)?,
+            "API contracts do not independently rebuild from discovery receipts"
+        );
+        for record in &artifact.records {
+            let operation = artifact
+                .contracts
+                .iter()
+                .flat_map(|contract| &contract.operations)
+                .find(|operation| operation.selector == record.observation.selector)
+                .context("API record has no normalized operation")?;
+            let receipt = self
+                .runtime
+                .evidence
+                .get(&record.observation.receipt.receipt_id)?;
+            ensure!(
+                receipt.actor == ApiProbePhase::Primary.actor()
+                    && receipt.content_hash == record.observation.receipt.receipt_content_hash
+                    && api_observation_from_receipt(
+                        &record.observation.selector,
+                        operation,
+                        &receipt
+                    )? == record.observation,
+                "API validation record does not rebuild from its sealed receipt"
+            );
+        }
+        for comparison in &artifact.replay_comparisons {
+            let operation = artifact
+                .contracts
+                .iter()
+                .flat_map(|contract| &contract.operations)
+                .find(|operation| operation.selector == comparison.selector)
+                .context("API replay has no normalized operation")?;
+            let receipt = self
+                .runtime
+                .evidence
+                .get(&comparison.independent.observation.receipt.receipt_id)?;
+            ensure!(
+                receipt.actor == ApiProbePhase::Replay.actor()
+                    && receipt.content_hash
+                        == comparison
+                            .independent
+                            .observation
+                            .receipt
+                            .receipt_content_hash
+                    && api_observation_from_receipt(&comparison.selector, operation, &receipt)?
+                        == comparison.independent.observation,
+                "API replay does not rebuild from its sealed receipt"
+            );
+        }
+        Ok(())
+    }
+
+    fn record_api_validation_findings(&mut self, artifact: &ApiValidationArtifact) -> Result<()> {
+        for comparison in &artifact.replay_comparisons {
+            let ReplayClassification::Reproduced { violation_hash } = &comparison.classification
+            else {
+                continue;
+            };
+            let source = artifact
+                .contracts
+                .iter()
+                .find(|contract| contract.source_url == comparison.selector.openapi_source_url)
+                .context("reproduced API violation has no source contract")?;
+            let primary_receipt = self
+                .runtime
+                .evidence
+                .get(&comparison.primary.observation.receipt.receipt_id)?;
+            let primary_runtime: ApiSchemaObservation =
+                serde_json::from_value(primary_receipt.output.data.clone())?;
+            let proof = Proof::ApiResponseContractViolation {
+                plan_hash: artifact.plan_hash.clone(),
+                contract_hash: comparison.contract_hash.clone(),
+                probe_id: comparison.probe_id.clone(),
+                observation_body_hash: primary_runtime.body_hash,
+                violation_hash: violation_hash.clone(),
+            };
+            let candidate = api_contract_candidate(
+                &comparison.selector,
+                &proof,
+                vec![
+                    source.source_receipt.receipt_id.clone(),
+                    comparison.primary.observation.receipt.receipt_id.clone(),
+                    comparison
+                        .independent
+                        .observation
+                        .receipt
+                        .receipt_id
+                        .clone(),
+                ],
+            );
+            candidate.validate_with_overrides(&self.snapshot.config.overrides)?;
+            let id = format!(
+                "finding-{}",
+                &hash(
+                    serde_json::to_string(&(self.snapshot.id.as_str(), &candidate.proof))?
+                        .as_bytes()
+                )[..24]
+            );
+            if self
+                .snapshot
+                .findings
+                .iter()
+                .any(|finding| finding.id == id)
+            {
+                continue;
+            }
+            let primary_id = comparison.primary.observation.receipt.receipt_id.clone();
+            let replay_id = comparison
+                .independent
+                .observation
+                .receipt
+                .receipt_id
+                .clone();
+            let source_id = source.source_receipt.receipt_id.clone();
+            let mut finding = Finding {
+                id,
+                candidate,
+                state: FindingState::Candidate,
+                finder: "api-response-contract-validator".into(),
+                validations: vec![Validation {
+                    actor: "api-schema-replay".into(),
+                    receipt_ids: vec![replay_id.clone()],
+                    reproduced: true,
+                    reason: "An independent typed request reproduced the exact canonical contract violation.".into(),
+                    timestamp_ms: now_ms(),
+                }],
+                review_reason: "Independent receipt replay reproduced the exact normalized OpenAPI contract violation.".into(),
+                introduced: None,
+                claim_receipts: BTreeMap::from([(
+                    "Repeated response-contract violation".into(),
+                    vec![source_id, primary_id, replay_id],
+                )]),
+                confirmation_override: None,
+            };
+            finding.transition(FindingState::Reproduced)?;
+            finding.transition(FindingState::Confirmed)?;
+            self.snapshot.findings.push(finding);
+            self.checkpoint()?;
+        }
+        Ok(())
+    }
+
+    fn record_api_validation_coverage(&mut self, artifact: &ApiValidationArtifact) -> Result<()> {
+        if self.snapshot.decisions.iter().any(|decision| {
+            decision["action"] == "api_validation_coverage"
+                && decision["plan_hash"] == artifact.plan_hash
+        }) {
+            return Ok(());
+        }
+        let mut selectors = Vec::with_capacity(artifact.records.len());
+        for record in &artifact.records {
+            let contract = artifact
+                .contracts
+                .iter()
+                .find(|contract| {
+                    contract.source_url == record.observation.selector.openapi_source_url
+                })
+                .context("API coverage record has no source contract")?;
+            let replay = artifact
+                .replay_comparisons
+                .iter()
+                .find(|comparison| comparison.selector == record.observation.selector);
+            let (classification, reasons) = match &record.result {
+                Conformance::Conforming => ("conforming", json!([])),
+                Conformance::Violating { reasons } => ("violating", serde_json::to_value(reasons)?),
+                Conformance::Inconclusive { reasons } => {
+                    let detail = format!(
+                        "API selector {} {} was inconclusive: {}. Source receipt {}; response receipt {}. No negative coverage claim was made.",
+                        record.observation.selector.method.as_lowercase().to_ascii_uppercase(),
+                        record.observation.selector.path,
+                        serde_json::to_string(reasons)?,
+                        contract.source_receipt.receipt_id,
+                        record.observation.receipt.receipt_id
+                    );
+                    if !self.snapshot.limitations.contains(&detail) {
+                        self.snapshot.limitations.push(detail);
+                    }
+                    ("inconclusive", serde_json::to_value(reasons)?)
+                }
+            };
+            if matches!(record.result, Conformance::Violating { .. })
+                && replay.is_some_and(|comparison| {
+                    !matches!(
+                        comparison.classification,
+                        ReplayClassification::Reproduced { .. }
+                    )
+                })
+            {
+                let comparison = replay.context("violating API result lost its replay")?;
+                let detail = format!(
+                    "API selector {} {} did not reproduce exactly: {}. Primary receipt {}; replay receipt {}. No finding or negative coverage claim was created.",
+                    record.observation.selector.method.as_lowercase().to_ascii_uppercase(),
+                    record.observation.selector.path,
+                    serde_json::to_string(&comparison.classification)?,
+                    record.observation.receipt.receipt_id,
+                    comparison.independent.observation.receipt.receipt_id
+                );
+                if !self.snapshot.limitations.contains(&detail) {
+                    self.snapshot.limitations.push(detail);
+                }
+            }
+            selectors.push(json!({
+                "selector":record.observation.selector,
+                "probe_id":record.observation.probe_id,
+                "contract_hash":record.observation.contract_hash,
+                "classification":classification,
+                "reasons":reasons,
+                "lineage":{
+                    "source_receipt":contract.source_receipt,
+                    "primary_response_receipt":record.observation.receipt,
+                    "replay_response_receipt":replay.map(|comparison| &comparison.independent.observation.receipt)
+                },
+                "replay_classification":replay.map(|comparison| &comparison.classification)
+            }));
+        }
+        self.snapshot.decisions.push(json!({
+            "action":"api_validation_coverage",
+            "plan_hash":artifact.plan_hash,
+            "contract_set_hash":artifact.contract_set_hash,
+            "selectors":selectors,
+            "negative_coverage_claimed_for_inconclusive":false
+        }));
+        self.checkpoint()
     }
 
     fn discovery_receipt_for_url(
@@ -3227,6 +4083,13 @@ fn canonicalize_supported_claim(candidate: &mut Candidate) {
             candidate.location = canonical.location;
             candidate.cwe = canonical.cwe;
         }
+        Proof::ApiResponseContractViolation { .. } => {
+            candidate.title = "OpenAPI response contract is repeatedly violated".into();
+            candidate.severity = Severity::Low;
+            candidate.severity_justification = "A deterministic API contract mismatch was reproduced, without demonstrated confidentiality, integrity, or availability impact.".into();
+            candidate.impact = "Clients generated from the declared API contract may reject or mishandle this response.".into();
+            candidate.remediation = "Align the implementation with the published OpenAPI response contract, or version the contract intentionally.".into();
+        }
         Proof::Manual { .. } => return,
     }
     candidate.cvss = None;
@@ -3257,6 +4120,7 @@ fn proof_action(proof: &Proof) -> Result<Option<ToolAction>> {
             parameter: parameter.clone(),
             canary: random_id("redirect")?,
         }),
+        Proof::ApiResponseContractViolation { .. } => None,
         Proof::Manual { .. } => None,
     })
 }
@@ -3395,6 +4259,34 @@ fn proof_matches(proof: &Proof, receipt: &Receipt) -> bool {
         Proof::OpenRedirect { .. } => open_redirect_observation_for_proof(proof, receipt)
             .as_ref()
             .is_some_and(open_redirect_predicate),
+        Proof::ApiResponseContractViolation {
+            plan_hash,
+            contract_hash,
+            probe_id,
+            observation_body_hash,
+            ..
+        } => {
+            let Ok(observation) =
+                serde_json::from_value::<ApiSchemaObservation>(receipt.output.data.clone())
+            else {
+                return false;
+            };
+            matches!(
+                &receipt.output.action,
+                ToolAction::ApiSchemaProbe {
+                    plan_hash: action_plan,
+                    contract_hash: action_contract,
+                    probe_id: action_probe,
+                    ..
+                } if action_plan == plan_hash
+                    && action_contract == contract_hash
+                    && action_probe == probe_id
+            ) && observation.validate().is_ok()
+                && observation.plan_hash == *plan_hash
+                && observation.contract_hash == *contract_hash
+                && observation.probe_id == *probe_id
+                && observation.body_hash == *observation_body_hash
+        }
         Proof::Manual { .. } => false,
     }
 }
@@ -3433,6 +4325,345 @@ fn finalize_saved(run: &mut RunSnapshot, runtime: &Runtime, root: &Path) -> Resu
     write_json(&root.join("receipts-manifest.json"),&receipts.iter().map(|r|json!({"id":r.id,"hash":r.content_hash,"actor":r.actor,"captured_ms":r.captured_ms,"successful":r.output.successful,"expert_override":r.expert_override})).collect::<Vec<_>>())?;
     reporting::write_all(run, root)
 }
+
+struct ApiRetestContext {
+    operation: OperationContract,
+    expected_violation_hash: String,
+    expected_status: u16,
+    expected_media_type: Option<String>,
+    action: ToolAction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiRetestOperationIntent {
+    schema_version: u32,
+    attempt: usize,
+    finding_id: String,
+    proof: Proof,
+    action: ToolAction,
+    prior_exact_receipt_ids: Vec<String>,
+    state: DiscoveryIntentState,
+    receipt_id: Option<String>,
+}
+
+impl ApiRetestOperationIntent {
+    fn pending(
+        attempt: usize,
+        finding_id: String,
+        proof: Proof,
+        action: ToolAction,
+        mut prior_exact_receipt_ids: Vec<String>,
+    ) -> Self {
+        prior_exact_receipt_ids.sort();
+        prior_exact_receipt_ids.dedup();
+        Self {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            attempt,
+            finding_id,
+            proof,
+            action,
+            prior_exact_receipt_ids,
+            state: DiscoveryIntentState::Pending,
+            receipt_id: None,
+        }
+    }
+
+    fn resolve(&mut self, receipt: &Receipt) {
+        self.state = DiscoveryIntentState::Receipted;
+        self.receipt_id = Some(receipt.id.clone());
+    }
+
+    fn validate(
+        &self,
+        attempt: usize,
+        finding_id: &str,
+        proof: &Proof,
+        action: &ToolAction,
+    ) -> Result<()> {
+        ensure!(
+            self.schema_version == API_VALIDATION_SCHEMA_VERSION
+                && self.attempt == attempt
+                && self.finding_id == finding_id
+                && &self.proof == proof
+                && &self.action == action,
+            "API retest intent does not match its exact attempt, finding, proof, and action"
+        );
+        ensure!(
+            matches!(self.state, DiscoveryIntentState::Pending) == self.receipt_id.is_none(),
+            "API retest intent state contradicts its receipt lineage"
+        );
+        ensure!(
+            self.prior_exact_receipt_ids
+                .windows(2)
+                .all(|pair| pair[0] < pair[1]),
+            "API retest intent prior-receipt boundary is not canonical"
+        );
+        Ok(())
+    }
+}
+
+async fn execute_api_retest_attempt(
+    root: &Path,
+    run: &RunSnapshot,
+    finding_id: &str,
+    proof: &Proof,
+    action: ToolAction,
+    runtime: &mut Runtime,
+) -> Result<Receipt> {
+    const ACTOR: &str = "independent-retest";
+    let attempt = run
+        .findings
+        .iter()
+        .find(|finding| finding.id == finding_id)
+        .context("API retest finding disappeared")?
+        .validations
+        .iter()
+        .filter(|validation| validation.actor == ACTOR)
+        .count();
+    let intents_dir = root.join("api-retest-intents");
+    secure_dir(&intents_dir)?;
+    let intent_path = intents_dir.join(format!(
+        "intent-{}-{attempt}.json",
+        &hash(finding_id.as_bytes())[..24]
+    ));
+    let receipt = if intent_path.exists() {
+        let mut intent: ApiRetestOperationIntent = read_json(&intent_path)?;
+        intent.validate(attempt, finding_id, proof, &action)?;
+        match intent.state {
+            DiscoveryIntentState::Receipted | DiscoveryIntentState::Indeterminate => {
+                let receipt = runtime.evidence.get(
+                    intent
+                        .receipt_id
+                        .as_deref()
+                        .context("resolved API retest intent lacks a receipt")?,
+                )?;
+                ensure!(
+                    receipt.actor == ACTOR
+                        && receipt.output.action == intent.action
+                        && !intent.prior_exact_receipt_ids.contains(&receipt.id),
+                    "resolved API retest intent does not bind its exact post-intent receipt"
+                );
+                receipt
+            }
+            DiscoveryIntentState::Pending => {
+                let prior = intent
+                    .prior_exact_receipt_ids
+                    .iter()
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                let recoverable = runtime
+                    .evidence
+                    .manifest()?
+                    .into_iter()
+                    .filter(|receipt| {
+                        receipt.actor == ACTOR
+                            && receipt.output.action == intent.action
+                            && !prior.contains(&receipt.id)
+                    })
+                    .collect::<Vec<_>>();
+                ensure!(
+                    recoverable.len() <= 1,
+                    "pending API retest intent has ambiguous post-intent receipts"
+                );
+                if let Some(receipt) = recoverable.into_iter().next() {
+                    if receipt.output.data["indeterminate_after_crash"] == true {
+                        intent.state = DiscoveryIntentState::Indeterminate;
+                        intent.receipt_id = Some(receipt.id.clone());
+                    } else {
+                        intent.resolve(&receipt);
+                    }
+                    write_json(&intent_path, &intent)?;
+                    receipt
+                } else {
+                    let receipt = runtime.evidence.capture_with_override(
+                        ACTOR,
+                        ToolOutput {
+                            action: action.clone(),
+                            successful: false,
+                            data: json!({
+                                "error":"indeterminate_after_crash: a durable API retest intent exists without a sealed receipt; the request was not repeated",
+                                "indeterminate_after_crash":true
+                            }),
+                            truncated: false,
+                        },
+                        &run.config.overrides,
+                    )?;
+                    intent.state = DiscoveryIntentState::Indeterminate;
+                    intent.receipt_id = Some(receipt.id.clone());
+                    write_json(&intent_path, &intent)?;
+                    receipt
+                }
+            }
+        }
+    } else {
+        let prior_exact_receipt_ids = runtime
+            .evidence
+            .manifest()?
+            .into_iter()
+            .filter(|receipt| receipt.actor == ACTOR && receipt.output.action == action)
+            .map(|receipt| receipt.id)
+            .collect();
+        let mut intent = ApiRetestOperationIntent::pending(
+            attempt,
+            finding_id.to_owned(),
+            proof.clone(),
+            action.clone(),
+            prior_exact_receipt_ids,
+        );
+        write_json(&intent_path, &intent)?;
+        let receipt = runtime.execute(ACTOR, action).await?;
+        intent.resolve(&receipt);
+        write_json(&intent_path, &intent)?;
+        receipt
+    };
+    Ok(receipt)
+}
+
+fn api_retest_context(
+    run: &RunSnapshot,
+    root: &Path,
+    proof: &Proof,
+) -> Result<Option<ApiRetestContext>> {
+    let Proof::ApiResponseContractViolation {
+        plan_hash,
+        contract_hash,
+        probe_id,
+        observation_body_hash,
+        violation_hash,
+    } = proof
+    else {
+        return Ok(None);
+    };
+    let plan_path = run
+        .config
+        .api_validation_plan
+        .as_deref()
+        .context("API finding has no bound validation plan")?;
+    ensure!(
+        plan_path.canonicalize()?
+            == root
+                .join("configured-api-validation-plan.json")
+                .canonicalize()?,
+        "API retest plan is not the run-bound canonical copy"
+    );
+    let plan: ApiValidationPlan = read_json(plan_path)?;
+    let plan = plan.canonicalized()?;
+    ensure!(
+        plan.fingerprint()? == *plan_hash
+            && run.config.api_validation_plan_hash.as_deref() == Some(plan_hash),
+        "API retest plan hash mismatch"
+    );
+    let discovery_path = run
+        .config
+        .discovery_plan
+        .as_deref()
+        .context("API finding has no bound discovery plan")?;
+    let discovery: DiscoveryPlan = read_json(discovery_path)?;
+    let discovery = discovery.canonicalized()?;
+    let artifact_path = root
+        .join("api-validation")
+        .join(&plan_hash[..24])
+        .join("artifact.json");
+    let artifact: ApiValidationArtifact = read_json(&artifact_path)?;
+    artifact.verify(&plan)?;
+    let stage: ApiValidationStageRecord = read_json(
+        &artifact_path
+            .parent()
+            .context("API artifact has no directory")?
+            .join("stage.json"),
+    )?;
+    ensure!(
+        stage.complete
+            && stage.plan_hash == *plan_hash
+            && stage.artifact_hash == artifact.canonical_hash()?,
+        "API retest artifact is not sealed by a completed stage"
+    );
+    let operation = artifact
+        .contracts
+        .iter()
+        .flat_map(|contract| &contract.operations)
+        .find(|operation| {
+            operation.probe_id == *probe_id
+                && operation
+                    .canonical_hash()
+                    .is_ok_and(|hash| hash == *contract_hash)
+        })
+        .cloned()
+        .context("API finding contract is absent from the verified artifact")?;
+    let comparison = artifact
+        .replay_comparisons
+        .iter()
+        .find(|comparison| {
+            comparison.probe_id == *probe_id
+                && comparison.contract_hash == *contract_hash
+                && matches!(
+                    &comparison.classification,
+                    ReplayClassification::Reproduced { violation_hash: found }
+                        if found == violation_hash
+                )
+        })
+        .context("API finding replay is absent from the verified artifact")?;
+    let evidence = EvidenceStore::new(
+        &root.join("receipts"),
+        &run.id,
+        Redactor::with_override(&run.config.overrides),
+    )?;
+    let source_contract = artifact
+        .contracts
+        .iter()
+        .find(|contract| contract.source_url == operation.selector.openapi_source_url)
+        .context("API finding source contract is absent from the verified artifact")?;
+    let source_receipt = evidence.get(&source_contract.source_receipt.receipt_id)?;
+    let source_body = source_receipt.output.data["body"]
+        .as_str()
+        .context("API finding source receipt has no body")?;
+    ensure!(
+        source_receipt.actor == "web-discovery"
+            && source_receipt.content_hash == source_contract.source_receipt.receipt_content_hash
+            && source_receipt.output.successful
+            && !source_receipt.output.truncated
+            && hash(source_body.as_bytes()) == source_contract.document_hash,
+        "API finding source receipt lineage changed"
+    );
+    let primary_receipt = evidence.get(&comparison.primary.observation.receipt.receipt_id)?;
+    ensure!(
+        primary_receipt.actor == ApiProbePhase::Primary.actor()
+            && primary_receipt.content_hash
+                == comparison.primary.observation.receipt.receipt_content_hash
+            && api_observation_from_receipt(&operation.selector, &operation, &primary_receipt)?
+                == comparison.primary.observation,
+        "API finding primary receipt lineage changed"
+    );
+    let replay_receipt = evidence.get(&comparison.independent.observation.receipt.receipt_id)?;
+    ensure!(
+        replay_receipt.actor == ApiProbePhase::Replay.actor()
+            && replay_receipt.content_hash
+                == comparison
+                    .independent
+                    .observation
+                    .receipt
+                    .receipt_content_hash
+            && api_observation_from_receipt(&operation.selector, &operation, &replay_receipt)?
+                == comparison.independent.observation,
+        "API finding replay receipt lineage changed"
+    );
+    let primary_runtime: ApiSchemaObservation =
+        serde_json::from_value(primary_receipt.output.data)?;
+    ensure!(
+        primary_runtime.body_hash == *observation_body_hash,
+        "API finding body hash does not match its verified primary observation"
+    );
+    let action = api_probe_action(&plan, &discovery, &operation)?;
+    Ok(Some(ApiRetestContext {
+        operation,
+        expected_violation_hash: violation_hash.clone(),
+        expected_status: comparison.primary.observation.status,
+        expected_media_type: comparison.primary.observation.media_type.clone(),
+        action,
+    }))
+}
+
 pub async fn retest_with_overrides(
     root: &Path,
     finding_id: &str,
@@ -3462,7 +4693,12 @@ pub async fn retest_with_overrides(
                     .any(|validation| validation.reproduced)),
         "retest requires a confirmed, fixed, operator-accepted, or previously reproduced inconclusive finding"
     );
-    let mut action = proof_action(&proof)?.context("manual proof requires manual retest")?;
+    let api_retest = api_retest_context(&run, root, &proof)?;
+    let mut action = if let Some(context) = &api_retest {
+        context.action.clone()
+    } else {
+        proof_action(&proof)?.context("manual proof requires manual retest")?
+    };
     if let ToolAction::SourceRead {
         start_line,
         end_line,
@@ -3480,7 +4716,11 @@ pub async fn retest_with_overrides(
     }
     let mut runtime = runtime_for_snapshot(&run, root)?;
     runtime.authorize(authorized || run.config.authorized);
-    let receipt = runtime.execute("independent-retest", action).await?;
+    let receipt = if api_retest.is_some() {
+        execute_api_retest_attempt(root, &run, finding_id, &proof, action, &mut runtime).await?
+    } else {
+        runtime.execute("independent-retest", action).await?
+    };
     let (present, eligible) = match &proof {
         Proof::SourceRule { rule, .. } => {
             let content = receipt.output.data["content"].as_str().unwrap_or_default();
@@ -3508,6 +4748,31 @@ pub async fn retest_with_overrides(
                     .is_some_and(open_redirect_retest_is_conclusive),
             )
         }
+        Proof::ApiResponseContractViolation { .. } => {
+            let Some(context) = &api_retest else {
+                anyhow::bail!("API retest context was not reconstructed")
+            };
+            if !receipt.output.successful {
+                (false, false)
+            } else {
+                let actual = api_observation_from_receipt(
+                    &context.operation.selector,
+                    &context.operation,
+                    &receipt,
+                )?;
+                match classify_response(&context.operation, &actual)? {
+                    Conformance::Violating { reasons } => {
+                        let reproduced = violation_hash(&reasons)?
+                            == context.expected_violation_hash
+                            && actual.status == context.expected_status
+                            && actual.media_type == context.expected_media_type;
+                        (reproduced, reproduced)
+                    }
+                    Conformance::Conforming => (false, true),
+                    Conformance::Inconclusive { .. } => (false, false),
+                }
+            }
+        }
         _ => (proof_matches(&proof, &receipt), receipt.output.successful),
     };
     let state = if !eligible {
@@ -3525,7 +4790,12 @@ pub async fn retest_with_overrides(
             .or_default()
             .push(receipt.id.clone());
     }
-    run.findings[index].transition(state)?;
+    if !(api_retest.is_some()
+        && state == FindingState::NeedsReview
+        && run.findings[index].state == FindingState::NeedsReview)
+    {
+        run.findings[index].transition(state)?;
+    }
     run.receipt_ids.push(receipt.id);
     run.status = RunStatus::Complete;
     run.decisions.push(
@@ -3592,6 +4862,273 @@ fn parse_browser_kind(value: &str) -> Result<BrowserKind> {
         "compatible" => BrowserKind::Compatible,
         _ => anyhow::bail!("unsupported browser kind"),
     })
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ApiProbePhase {
+    Primary,
+    Replay,
+}
+
+impl ApiProbePhase {
+    fn actor(self) -> &'static str {
+        match self {
+            Self::Primary => "api-schema-primary",
+            Self::Replay => "api-schema-replay",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiValidationStageRecord {
+    schema_version: u32,
+    stage_key: String,
+    plan_hash: String,
+    artifact_hash: String,
+    complete: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApiProbeOperationIntent {
+    schema_version: u32,
+    stage_key: String,
+    phase: ApiProbePhase,
+    selector: OperationSelector,
+    action: ToolAction,
+    state: DiscoveryIntentState,
+    receipt_id: Option<String>,
+}
+
+impl ApiProbeOperationIntent {
+    fn pending(
+        stage_key: String,
+        phase: ApiProbePhase,
+        selector: OperationSelector,
+        action: ToolAction,
+    ) -> Self {
+        Self {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            stage_key,
+            phase,
+            selector,
+            action,
+            state: DiscoveryIntentState::Pending,
+            receipt_id: None,
+        }
+    }
+
+    fn resolve(&mut self, receipt: &Receipt) {
+        self.state = DiscoveryIntentState::Receipted;
+        self.receipt_id = Some(receipt.id.clone());
+    }
+
+    fn validate(
+        &self,
+        stage_key: &str,
+        phase: ApiProbePhase,
+        selector: &OperationSelector,
+        action: &ToolAction,
+    ) -> Result<()> {
+        ensure!(
+            self.schema_version == API_VALIDATION_SCHEMA_VERSION
+                && self.stage_key == stage_key
+                && self.phase == phase
+                && &self.selector == selector
+                && &self.action == action,
+            "API probe intent does not match its exact stage, selector, and action"
+        );
+        ensure!(
+            matches!(self.state, DiscoveryIntentState::Pending) == self.receipt_id.is_none(),
+            "API probe intent state contradicts its receipt lineage"
+        );
+        Ok(())
+    }
+}
+
+fn latest_exact_receipt(receipts: &[Receipt], actor: &str, action: &ToolAction) -> Option<Receipt> {
+    let mut matching = receipts
+        .iter()
+        .filter(|receipt| receipt.actor == actor && &receipt.output.action == action)
+        .cloned()
+        .collect::<Vec<_>>();
+    matching.sort_by(|left, right| {
+        (left.captured_ms, left.id.as_str()).cmp(&(right.captured_ms, right.id.as_str()))
+    });
+    matching.pop()
+}
+
+fn api_probe_action(
+    plan: &ApiValidationPlan,
+    discovery_plan: &DiscoveryPlan,
+    operation: &OperationContract,
+) -> Result<ToolAction> {
+    let method = match operation.selector.method {
+        SafeMethod::Get => ApiProbeMethod::Get,
+        SafeMethod::Head => ApiProbeMethod::Head,
+        SafeMethod::Options => ApiProbeMethod::Options,
+    };
+    Ok(ToolAction::ApiSchemaProbe {
+        plan_hash: plan.fingerprint()?,
+        contract_hash: operation.canonical_hash()?,
+        probe_id: operation.probe_id.clone(),
+        method,
+        url: api_probe_url(operation)?,
+        allowed_origins: discovery_plan.allowed_origins.clone(),
+        max_response_bytes: plan.bounds.max_response_bytes,
+        max_shape_nodes: plan.bounds.max_shape_nodes,
+        max_shape_depth: plan.bounds.max_shape_depth,
+        max_properties: plan.bounds.max_properties,
+        max_array_items: plan.bounds.max_array_items,
+    })
+}
+
+fn api_probe_url(operation: &OperationContract) -> Result<String> {
+    ensure!(
+        materialize_request_url(&operation.server_url, &operation.selector.path)?
+            == operation.request_url,
+        "normalized API request URL is inconsistent"
+    );
+    Ok(operation.request_url.clone())
+}
+
+fn url_origin(raw: &str) -> Option<String> {
+    let parsed = url::Url::parse(raw).ok()?;
+    Some(parsed.origin().ascii_serialization())
+}
+
+fn validation_json_shape(shape: &JsonShape) -> ValidationJsonShape {
+    match shape {
+        JsonShape::Null => ValidationJsonShape::Null,
+        JsonShape::Boolean => ValidationJsonShape::Boolean,
+        JsonShape::Integer => ValidationJsonShape::Integer,
+        JsonShape::Number => ValidationJsonShape::Number,
+        JsonShape::String => ValidationJsonShape::String,
+        JsonShape::Object { properties } => ValidationJsonShape::Object {
+            properties: properties
+                .iter()
+                .map(|property| {
+                    (
+                        property.name.clone(),
+                        validation_json_shape(&property.shape),
+                    )
+                })
+                .collect(),
+        },
+        JsonShape::Array { elements } => {
+            let mut item_shapes = elements
+                .iter()
+                .map(validation_json_shape)
+                .collect::<Vec<_>>();
+            item_shapes.sort();
+            item_shapes.dedup();
+            ValidationJsonShape::Array { item_shapes }
+        }
+    }
+}
+
+fn api_observation_from_receipt(
+    selector: &OperationSelector,
+    operation: &OperationContract,
+    receipt: &Receipt,
+) -> Result<ActualResponseObservation> {
+    ensure!(
+        receipt.output.successful,
+        "unsuccessful API receipt cannot become a validation observation"
+    );
+    let observation: ApiSchemaObservation = serde_json::from_value(receipt.output.data.clone())?;
+    observation.validate()?;
+    let ToolAction::ApiSchemaProbe {
+        plan_hash,
+        contract_hash,
+        probe_id,
+        method,
+        url,
+        max_response_bytes,
+        max_shape_nodes,
+        max_shape_depth,
+        max_properties,
+        max_array_items,
+        ..
+    } = &receipt.output.action
+    else {
+        anyhow::bail!("API validation receipt contains the wrong action type")
+    };
+    ensure!(
+        observation.plan_hash == *plan_hash
+            && observation.contract_hash == *contract_hash
+            && observation.probe_id == *probe_id
+            && observation.method == *method
+            && observation.url == *url
+            && observation.max_response_bytes == *max_response_bytes
+            && observation.max_shape_nodes == *max_shape_nodes
+            && observation.max_shape_depth == *max_shape_depth
+            && observation.max_properties == *max_properties
+            && observation.max_array_items == *max_array_items
+            && operation.probe_id == *probe_id
+            && operation.canonical_hash()? == *contract_hash
+            && observation.request_provenance.request_count == 1
+            && !observation.request_provenance.redirect_followed
+            && !observation.request_provenance.proxy_used
+            && !observation.request_provenance.credentials_sent,
+        "API observation does not bind its exact typed action and contract"
+    );
+    let malformed_json = matches!(
+        observation.json_classification,
+        JsonBodyClassification::InvalidJson | JsonBodyClassification::InvalidUtf8
+    );
+    let actual = ActualResponseObservation {
+        selector: selector.clone(),
+        probe_id: observation.probe_id,
+        contract_hash: observation.contract_hash,
+        status: observation.status,
+        media_type: observation.media_type,
+        json_shape: observation.json_shape.as_ref().map(validation_json_shape),
+        body_present: observation.body_bytes > 0,
+        body_truncated: observation.body_truncated || receipt.output.truncated,
+        malformed_json,
+        // Header truncation also prevents a complete negative contract claim.
+        shape_truncated: observation.shape_truncated || observation.headers_truncated,
+        receipt: ApiReceiptLineage {
+            receipt_id: receipt.id.clone(),
+            receipt_content_hash: receipt.content_hash.clone(),
+        },
+    };
+    actual.validate()?;
+    Ok(actual)
+}
+
+fn api_contract_candidate(
+    selector: &OperationSelector,
+    proof: &Proof,
+    receipt_ids: Vec<String>,
+) -> Candidate {
+    Candidate {
+        title: "OpenAPI response contract is repeatedly violated".into(),
+        description: format!(
+            "Two independent, read-only typed requests reproduced the same structural response-contract violation for {} {}. Scalar response values were not retained.",
+            selector.method.as_lowercase().to_ascii_uppercase(), selector.path
+        ),
+        severity: Severity::Low,
+        severity_justification: "A deterministic API contract mismatch can break clients or expose an undocumented response shape, but no confidentiality, integrity, or availability impact was demonstrated.".into(),
+        cvss: None,
+        cwe: vec![],
+        owasp: vec![],
+        mitre: vec![],
+        location: format!("{}#{}:{}", selector.openapi_source_url, selector.method.as_lowercase(), selector.path),
+        payload: String::new(),
+        impact: "Clients generated from the declared API contract may reject or mishandle this response.".into(),
+        remediation: "Align the implementation response with the published OpenAPI status, media type, and schema, or update and version the contract intentionally.".into(),
+        confidence: 0.99,
+        auth_context: "unauthenticated read-only API probe".into(),
+        test_identity: None,
+        receipt_ids,
+        screenshots: vec![],
+        chains_from: vec![],
+        proof: proof.clone(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3906,6 +5443,10 @@ fn parse_chain_risk(value: &str) -> Result<RiskLevel> {
     })
 }
 
+fn receipt_contributes_chain_surface(receipt: &Receipt) -> bool {
+    !matches!(receipt.output.action, ToolAction::ApiSchemaProbe { .. })
+}
+
 fn derive_web_chain_facts(url: &str, data: &Value, facts: &mut BTreeSet<String>) {
     let url = url.to_ascii_lowercase();
     let body = data["body"]
@@ -3952,7 +5493,10 @@ fn derive_candidate_chain_facts(candidate: &Candidate, facts: &mut BTreeSet<Stri
         Proof::SourceRule { .. } => {
             facts.insert("source_manifest_seen".into());
         }
-        Proof::MissingHeader { .. } | Proof::OpenRedirect { .. } | Proof::Manual { .. } => {}
+        Proof::MissingHeader { .. }
+        | Proof::OpenRedirect { .. }
+        | Proof::ApiResponseContractViolation { .. }
+        | Proof::Manual { .. } => {}
     }
 }
 
@@ -4113,6 +5657,8 @@ pub fn default_config(mode: Mode, targets: Vec<String>, output_dir: PathBuf) -> 
         cloud_plan: None,
         discovery_plan: None,
         discovery_plan_hash: None,
+        api_validation_plan: None,
+        api_validation_plan_hash: None,
         chains: None,
         playbooks: None,
         max_steps: 20,
@@ -4149,6 +5695,8 @@ pub async fn local_demo(output: &Path) -> Result<RunSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     fn loopback_discovery_plan(seed: &str, plan_id: &str) -> Result<DiscoveryPlan> {
         Ok(DiscoveryPlan {
@@ -4158,6 +5706,1243 @@ mod tests {
             allowed_origins: vec![url::Url::parse(seed)?.origin().ascii_serialization()],
             bounds: DiscoveryBounds::default(),
         })
+    }
+
+    async fn api_fixture(
+        document_kind: &str,
+        response_body: &'static str,
+        pause_after_first_endpoint: Option<Arc<AtomicBool>>,
+        change_status_on_third_endpoint: bool,
+        response_mode: Option<Arc<AtomicUsize>>,
+    ) -> Result<(String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>)> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base = format!("http://{}", listener.local_addr()?);
+        let endpoint_requests = Arc::new(AtomicUsize::new(0));
+        let counter = endpoint_requests.clone();
+        let server_base = base.clone();
+        let kind = document_kind.to_owned();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let counter = counter.clone();
+                let base = server_base.clone();
+                let kind = kind.clone();
+                let pause_after_first_endpoint = pause_after_first_endpoint.clone();
+                let response_mode = response_mode.clone();
+                tokio::spawn(async move {
+                    let mut bytes = vec![0_u8; 16 * 1024];
+                    let size = stream.read(&mut bytes).await.unwrap_or_default();
+                    let request = String::from_utf8_lossy(&bytes[..size]);
+                    let path = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let mut endpoint_index = None;
+                    let (content_type, body) = if path == "/openapi.json" {
+                        let document = if kind == "yaml" {
+                            format!(
+                                "openapi: 3.0.0\nservers:\n  - url: {base}\npaths:\n  /api/users:\n    get:\n      operationId: listUsers\n      responses:\n        '200':\n          description: ok\n          content:\n            application/json:\n              schema:\n                type: object\n                required: [id]\n                properties:\n                  id:\n                    type: integer\n        '201':\n          description: alternate ok\n          content:\n            application/json:\n              schema:\n                type: object\n                required: [id]\n                properties:\n                  id:\n                    type: integer\n"
+                            )
+                        } else if kind == "unsupported" {
+                            serde_json::to_string(&json!({
+                                "openapi":"3.0.0",
+                                "servers":[{"url":base}],
+                                "paths":{ "/api/users":{"get":{
+                                    "operationId":"listUsers",
+                                    "responses":{
+                                        "200":{"description":"ok","content":{
+                                            "application/json":{"schema":{
+                                                "oneOf":[{"type":"object"},{"type":"array"}]
+                                            }}
+                                        }}
+                                    }
+                                }}}
+                            }))
+                            .unwrap()
+                        } else {
+                            serde_json::to_string(&json!({
+                                "openapi":"3.0.0",
+                                "servers":[{"url":base}],
+                                "paths":{"/api/users":{"get":{
+                                    "operationId":"listUsers",
+                                    "responses":{
+                                        "200":{"description":"ok","content":{
+                                            "application/json":{"schema":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"}}}}
+                                        }},
+                                        "201":{"description":"alternate ok","content":{
+                                            "application/json":{"schema":{"type":"object","required":["id"],"properties":{"id":{"type":"integer"}}}}
+                                        }}
+                                    }
+                                }}}
+                            }))
+                            .unwrap()
+                        };
+                        (
+                            if kind == "yaml" {
+                                "application/yaml"
+                            } else {
+                                "application/json"
+                            },
+                            document,
+                        )
+                    } else if path == "/api/users" {
+                        endpoint_index = Some(counter.fetch_add(1, Ordering::SeqCst));
+                        let body = match response_mode
+                            .as_ref()
+                            .map(|mode| mode.load(Ordering::SeqCst))
+                            .unwrap_or_default()
+                        {
+                            1 => r#"{"id":7}"#.to_owned(),
+                            2 => "{not-json".to_owned(),
+                            _ => response_body.to_owned(),
+                        };
+                        ("application/json", body)
+                    } else {
+                        ("text/plain", "not found".to_owned())
+                    };
+                    if endpoint_index.is_some()
+                        && response_mode
+                            .as_ref()
+                            .is_some_and(|mode| mode.load(Ordering::SeqCst) == 3)
+                    {
+                        return;
+                    }
+                    let status = if change_status_on_third_endpoint
+                        && endpoint_index.is_some_and(|index| index >= 2)
+                    {
+                        "201 Created"
+                    } else {
+                        "200 OK"
+                    };
+                    let reply = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(reply.as_bytes()).await;
+                    if endpoint_index == Some(0) {
+                        if let Some(pause) = pause_after_first_endpoint {
+                            pause.store(true, Ordering::SeqCst);
+                        }
+                    }
+                });
+            }
+        });
+        Ok((base, endpoint_requests, server))
+    }
+
+    async fn run_api_fixture(
+        document_kind: &str,
+        response_body: &'static str,
+        change_status_on_third_endpoint: bool,
+    ) -> Result<(
+        tempfile::TempDir,
+        RunSnapshot,
+        Arc<AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let output = tempfile::tempdir()?;
+        let (base, count, server) = api_fixture(
+            document_kind,
+            response_body,
+            None,
+            change_status_on_third_endpoint,
+            None,
+        )
+        .await?;
+        let source_url = format!("{base}/openapi.json");
+        let discovery_plan =
+            loopback_discovery_plan(&source_url, "api-discovery")?.canonicalized()?;
+        let discovery_hash = discovery_plan.fingerprint()?;
+        let validation_bounds = api_validation::ValidationBounds {
+            max_document_bytes: API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES,
+            ..Default::default()
+        };
+        let api_plan = ApiValidationPlan {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            plan_id: format!("api-{document_kind}"),
+            selectors: vec![OperationSelector {
+                discovery_plan_hash: discovery_hash,
+                openapi_source_url: source_url.clone(),
+                method: SafeMethod::Get,
+                path: "/api/users".into(),
+                operation_id: Some("listUsers".into()),
+            }],
+            bounds: validation_bounds,
+        };
+        let discovery_path = output.path().join("operator-discovery.json");
+        let api_path = output.path().join("operator-api-validation.json");
+        write_json(&discovery_path, &discovery_plan)?;
+        write_json(&api_path, &api_plan)?;
+        let mut config = default_config(Mode::Blackbox, vec![source_url], output.path().into())?;
+        config.discovery_plan = Some(discovery_path);
+        config.api_validation_plan = Some(api_path);
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        config.scope.max_requests = 100;
+        let result = Engine::new(config)?.run().await?;
+        Ok((output, result, count, server))
+    }
+
+    async fn run_mutable_api_fixture(
+        response_mode: Arc<AtomicUsize>,
+    ) -> Result<(
+        tempfile::TempDir,
+        RunSnapshot,
+        Arc<AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let output = tempfile::tempdir()?;
+        let (base, count, server) = api_fixture(
+            "json",
+            r#"{"id":"wrong-type"}"#,
+            None,
+            false,
+            Some(response_mode),
+        )
+        .await?;
+        let source_url = format!("{base}/openapi.json");
+        let discovery_plan =
+            loopback_discovery_plan(&source_url, "api-mutable-discovery")?.canonicalized()?;
+        let api_plan = ApiValidationPlan {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            plan_id: "api-mutable-retest".into(),
+            selectors: vec![OperationSelector {
+                discovery_plan_hash: discovery_plan.fingerprint()?,
+                openapi_source_url: source_url.clone(),
+                method: SafeMethod::Get,
+                path: "/api/users".into(),
+                operation_id: Some("listUsers".into()),
+            }],
+            bounds: api_validation::ValidationBounds {
+                max_document_bytes: API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES,
+                ..Default::default()
+            },
+        };
+        let discovery_path = output.path().join("operator-discovery.json");
+        let api_path = output.path().join("operator-api-validation.json");
+        write_json(&discovery_path, &discovery_plan)?;
+        write_json(&api_path, &api_plan)?;
+        let mut config = default_config(Mode::Blackbox, vec![source_url], output.path().into())?;
+        config.discovery_plan = Some(discovery_path);
+        config.api_validation_plan = Some(api_path);
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        config.scope.max_requests = 100;
+        let result = Engine::new(config)?.run().await?;
+        Ok((output, result, count, server))
+    }
+
+    async fn paused_api_fixture() -> Result<(
+        tempfile::TempDir,
+        Engine,
+        ApiValidationPlan,
+        DiscoveryPlan,
+        Arc<AtomicUsize>,
+        tokio::task::JoinHandle<()>,
+    )> {
+        let output = tempfile::tempdir()?;
+        let pause = Arc::new(AtomicBool::new(false));
+        let (base, count, server) = api_fixture(
+            "json",
+            r#"{"id":"wrong-type"}"#,
+            Some(pause.clone()),
+            false,
+            None,
+        )
+        .await?;
+        let source_url = format!("{base}/openapi.json");
+        let discovery_plan =
+            loopback_discovery_plan(&source_url, "api-crash-discovery")?.canonicalized()?;
+        let api_plan = ApiValidationPlan {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            plan_id: "api-crash-recovery".into(),
+            selectors: vec![OperationSelector {
+                discovery_plan_hash: discovery_plan.fingerprint()?,
+                openapi_source_url: source_url.clone(),
+                method: SafeMethod::Get,
+                path: "/api/users".into(),
+                operation_id: Some("listUsers".into()),
+            }],
+            bounds: api_validation::ValidationBounds {
+                max_document_bytes: API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES,
+                ..Default::default()
+            },
+        }
+        .canonicalized()?;
+        let discovery_path = output.path().join("operator-discovery.json");
+        let api_path = output.path().join("operator-api-validation.json");
+        write_json(&discovery_path, &discovery_plan)?;
+        write_json(&api_path, &api_plan)?;
+        let mut config = default_config(Mode::Blackbox, vec![source_url], output.path().into())?;
+        config.discovery_plan = Some(discovery_path);
+        config.api_validation_plan = Some(api_path);
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        config.scope.max_requests = 100;
+        let mut engine = Engine::new(config)?;
+        engine.control.pause = pause;
+        let paused = engine.run().await?;
+        ensure!(
+            paused.status == RunStatus::Paused,
+            "API fixture did not pause"
+        );
+        ensure!(
+            count.load(Ordering::SeqCst) == 1,
+            "API fixture did not pause after its primary request"
+        );
+        Ok((output, engine, api_plan, discovery_plan, count, server))
+    }
+
+    fn paused_api_probe_parts(
+        output: &Path,
+        plan: &ApiValidationPlan,
+        discovery_plan: &DiscoveryPlan,
+    ) -> Result<(String, PathBuf, OperationSelector, ToolAction)> {
+        let plan_hash = plan.fingerprint()?;
+        let directory = output.join("api-validation").join(&plan_hash[..24]);
+        let contracts: Vec<NormalizedOpenApi> = read_json(&directory.join("contracts.json"))?;
+        let operation = contracts
+            .iter()
+            .flat_map(|contract| &contract.operations)
+            .next()
+            .context("paused API fixture contract missing")?;
+        Ok((
+            stage_key("api-validation", plan)?,
+            directory.join("intents"),
+            operation.selector.clone(),
+            api_probe_action(plan, discovery_plan, operation)?,
+        ))
+    }
+
+    #[tokio::test]
+    async fn api_contract_violation_is_replayed_and_confirmed_from_json_contract() -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let findings = run
+            .findings
+            .iter()
+            .filter(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].state, FindingState::Confirmed);
+        assert_eq!(findings[0].candidate.receipt_ids.len(), 3);
+        // OpenAPI discovery declares but does not implicitly execute the
+        // operation; validation uses distinct primary and replay requests.
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        let retested = retest(output.path(), &findings[0].id, true).await?;
+        assert_eq!(
+            retested
+                .findings
+                .iter()
+                .find(|finding| finding.id == findings[0].id)
+                .map(|finding| finding.state),
+            Some(FindingState::RetestedPresent)
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn confirmed_api_lineage_is_exposed_in_json_markdown_html_and_sarif_reports() -> Result<()>
+    {
+        let (output, run, _requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        let contract_hash = match &finding.candidate.proof {
+            Proof::ApiResponseContractViolation { contract_hash, .. } => contract_hash,
+            _ => unreachable!(),
+        };
+        let report: Value = read_json(&output.path().join("report.json"))?;
+        let report_finding = report["run"]["findings"]
+            .as_array()
+            .and_then(|findings| {
+                findings
+                    .iter()
+                    .find(|candidate| candidate["id"] == finding.id)
+            })
+            .context("JSON report API finding missing")?;
+        assert_eq!(
+            report_finding["candidate"]["receipt_ids"],
+            serde_json::to_value(&finding.candidate.receipt_ids)?
+        );
+        assert_eq!(
+            report_finding["claim_receipts"]["Repeated response-contract violation"]
+                .as_array()
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(
+            report_finding["validations"][0]["receipt_ids"][0],
+            finding.candidate.receipt_ids[2]
+        );
+        let coverage = report["run"]["decisions"]
+            .as_array()
+            .and_then(|decisions| {
+                decisions
+                    .iter()
+                    .find(|decision| decision["action"] == "api_validation_coverage")
+            })
+            .context("JSON report API coverage missing")?;
+        let lineage = &coverage["selectors"][0]["lineage"];
+        assert_eq!(
+            lineage["source_receipt"]["receipt_id"],
+            finding.candidate.receipt_ids[0]
+        );
+        assert_eq!(
+            lineage["primary_response_receipt"]["receipt_id"],
+            finding.candidate.receipt_ids[1]
+        );
+        assert_eq!(
+            lineage["replay_response_receipt"]["receipt_id"],
+            finding.candidate.receipt_ids[2]
+        );
+        assert_eq!(coverage["selectors"][0]["contract_hash"], *contract_hash);
+
+        for report_name in ["report.md", "report.html"] {
+            let rendered = std::fs::read_to_string(output.path().join(report_name))?;
+            assert!(rendered.contains(contract_hash));
+            assert!(finding
+                .candidate
+                .receipt_ids
+                .iter()
+                .all(|receipt_id| rendered.contains(receipt_id)));
+            assert!(rendered.contains("Repeated response-contract violation"));
+        }
+
+        let sarif: Value = read_json(&output.path().join("report.sarif"))?;
+        let result = sarif["runs"][0]["results"]
+            .as_array()
+            .and_then(|results| {
+                results.iter().find(|result| {
+                    result["partialFingerprints"]["metisblackFinding/v1"] == finding.id
+                })
+            })
+            .context("SARIF API finding missing")?;
+        assert_eq!(
+            result["properties"]["receipts"],
+            serde_json::to_value(&finding.candidate.receipt_ids)?
+        );
+        assert_eq!(
+            result["properties"]["claimReceiptMap"]["Repeated response-contract violation"]
+                .as_array()
+                .map(Vec::len),
+            Some(3)
+        );
+        assert_eq!(
+            result["properties"]["validationLineage"][0]["receipt_ids"][0],
+            finding.candidate.receipt_ids[2]
+        );
+        let sarif_coverage = sarif["runs"][0]["properties"]["decisions"]
+            .as_array()
+            .and_then(|decisions| {
+                decisions
+                    .iter()
+                    .find(|decision| decision["action"] == "api_validation_coverage")
+            })
+            .context("SARIF API coverage missing")?;
+        assert_eq!(
+            sarif_coverage["selectors"][0]["lineage"],
+            coverage["selectors"][0]["lineage"]
+        );
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn conforming_yaml_api_contract_is_neutral_without_replay() -> Result<()> {
+        let (_output, run, requests, server) =
+            run_api_fixture("yaml", r#"{"id":7}"#, false).await?;
+        assert!(!run.findings.iter().any(|finding| matches!(
+            finding.candidate.proof,
+            Proof::ApiResponseContractViolation { .. }
+        )));
+        let coverage = run
+            .decisions
+            .iter()
+            .find(|decision| decision["action"] == "api_validation_coverage")
+            .context("API coverage summary missing")?;
+        assert_eq!(coverage["selectors"][0]["classification"], "conforming");
+        assert!(coverage["selectors"][0]["lineage"]["source_receipt"].is_object());
+        assert!(coverage["selectors"][0]["lineage"]["primary_response_receipt"].is_object());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_retest_requires_exact_status_and_media_not_only_violation_hash() -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, true).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        assert_eq!(finding.state, FindingState::Confirmed);
+        let retested = retest(output.path(), &finding.id, true).await?;
+        let finding = retested
+            .findings
+            .iter()
+            .find(|candidate| candidate.id == finding.id)
+            .context("retested API finding missing")?;
+        assert_eq!(finding.state, FindingState::NeedsReview);
+        assert!(!finding.validations.last().is_some_and(|v| v.reproduced));
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_retest_distinguishes_fixed_transport_failure_inconclusive_and_present(
+    ) -> Result<()> {
+        let response_mode = Arc::new(AtomicUsize::new(0));
+        let (output, run, requests, server) =
+            run_mutable_api_fixture(response_mode.clone()).await?;
+        let finding_id = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .map(|finding| finding.id.clone())
+            .context("API violation finding missing")?;
+
+        response_mode.store(1, Ordering::SeqCst);
+        let fixed = retest(output.path(), &finding_id, true).await?;
+        assert_eq!(
+            fixed
+                .findings
+                .iter()
+                .find(|finding| finding.id == finding_id)
+                .map(|finding| finding.state),
+            Some(FindingState::RetestedFixed)
+        );
+
+        response_mode.store(3, Ordering::SeqCst);
+        let transient = retest(output.path(), &finding_id, true).await?;
+        let finding = transient
+            .findings
+            .iter()
+            .find(|finding| finding.id == finding_id)
+            .context("transient API retest finding missing")?;
+        assert_eq!(finding.state, FindingState::NeedsReview);
+        assert!(!finding.validations.last().is_some_and(|v| v.reproduced));
+
+        response_mode.store(2, Ordering::SeqCst);
+        let inconclusive = retest(output.path(), &finding_id, true).await?;
+        let finding = inconclusive
+            .findings
+            .iter()
+            .find(|finding| finding.id == finding_id)
+            .context("inconclusive API retest finding missing")?;
+        assert_eq!(finding.state, FindingState::NeedsReview);
+        assert!(!finding.validations.last().is_some_and(|v| v.reproduced));
+
+        response_mode.store(0, Ordering::SeqCst);
+        let present = retest(output.path(), &finding_id, true).await?;
+        assert_eq!(
+            present
+                .findings
+                .iter()
+                .find(|finding| finding.id == finding_id)
+                .map(|finding| finding.state),
+            Some(FindingState::RetestedPresent)
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 6);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_api_retest_intent_is_indeterminate_without_network_repeat_then_retry_is_fresh(
+    ) -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        let context = api_retest_context(&run, output.path(), &finding.candidate.proof)?
+            .context("API retest context missing")?;
+        let intents_dir = output.path().join("api-retest-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!(
+            "intent-{}-0.json",
+            &hash(finding.id.as_bytes())[..24]
+        ));
+        write_json(
+            &intent_path,
+            &ApiRetestOperationIntent::pending(
+                0,
+                finding.id.clone(),
+                finding.candidate.proof.clone(),
+                context.action,
+                vec![],
+            ),
+        )?;
+
+        let indeterminate = retest(output.path(), &finding.id, true).await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        let finding = indeterminate
+            .findings
+            .iter()
+            .find(|candidate| candidate.id == finding.id)
+            .context("indeterminate API finding missing")?;
+        assert_eq!(finding.state, FindingState::NeedsReview);
+        let indeterminate_receipt_id = finding
+            .validations
+            .last()
+            .and_then(|validation| validation.receipt_ids.first())
+            .context("indeterminate API retest receipt missing")?;
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            &run.id,
+            Redactor::default(),
+        )?;
+        assert_eq!(
+            evidence.get(indeterminate_receipt_id)?.output.data["indeterminate_after_crash"],
+            true
+        );
+        let recorded: ApiRetestOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recorded.state, DiscoveryIntentState::Indeterminate);
+        assert_eq!(
+            recorded.receipt_id.as_deref(),
+            Some(indeterminate_receipt_id.as_str())
+        );
+
+        let retried = retest(output.path(), &finding.id, true).await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert_eq!(
+            retried
+                .findings
+                .iter()
+                .find(|candidate| candidate.id == finding.id)
+                .map(|finding| finding.state),
+            Some(FindingState::RetestedPresent)
+        );
+        assert!(intents_dir
+            .join(format!(
+                "intent-{}-1.json",
+                &hash(finding.id.as_bytes())[..24]
+            ))
+            .exists());
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_api_retest_intent_recovers_exact_sealed_receipt_without_network_repeat(
+    ) -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        let context = api_retest_context(&run, output.path(), &finding.candidate.proof)?
+            .context("API retest context missing")?;
+        let intents_dir = output.path().join("api-retest-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!(
+            "intent-{}-0.json",
+            &hash(finding.id.as_bytes())[..24]
+        ));
+        write_json(
+            &intent_path,
+            &ApiRetestOperationIntent::pending(
+                0,
+                finding.id.clone(),
+                finding.candidate.proof.clone(),
+                context.action.clone(),
+                vec![],
+            ),
+        )?;
+        let mut runtime = runtime_for_snapshot(&run, output.path())?;
+        runtime.authorize(true);
+        let sealed = runtime
+            .execute("independent-retest", context.action)
+            .await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        drop(runtime);
+
+        let recovered = retest(output.path(), &finding.id, true).await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        let recovered_finding = recovered
+            .findings
+            .iter()
+            .find(|candidate| candidate.id == finding.id)
+            .context("recovered API finding missing")?;
+        assert_eq!(recovered_finding.state, FindingState::RetestedPresent);
+        assert_eq!(
+            recovered_finding
+                .validations
+                .last()
+                .and_then(|validation| validation.receipt_ids.first())
+                .map(String::as_str),
+            Some(sealed.id.as_str())
+        );
+        let recorded: ApiRetestOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recorded.state, DiscoveryIntentState::Receipted);
+        assert_eq!(recorded.receipt_id.as_deref(), Some(sealed.id.as_str()));
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolved_api_retest_intent_rejects_swapped_receipt_before_network_io() -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        let context = api_retest_context(&run, output.path(), &finding.candidate.proof)?
+            .context("API retest context missing")?;
+        let mut intent = ApiRetestOperationIntent::pending(
+            0,
+            finding.id.clone(),
+            finding.candidate.proof.clone(),
+            context.action,
+            vec![],
+        );
+        intent.state = DiscoveryIntentState::Receipted;
+        intent.receipt_id = finding.candidate.receipt_ids.get(1).cloned();
+        let intents_dir = output.path().join("api-retest-intents");
+        secure_dir(&intents_dir)?;
+        write_json(
+            &intents_dir.join(format!(
+                "intent-{}-0.json",
+                &hash(finding.id.as_bytes())[..24]
+            )),
+            &intent,
+        )?;
+
+        assert!(retest(output.path(), &finding.id, true).await.is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn malformed_api_response_is_inconclusive_and_never_fixed_or_confirmed() -> Result<()> {
+        let (output, run, requests, server) = run_api_fixture("json", "{not-json", false).await?;
+        assert!(!run.findings.iter().any(|finding| matches!(
+            finding.candidate.proof,
+            Proof::ApiResponseContractViolation { .. }
+        )));
+        let coverage = run
+            .decisions
+            .iter()
+            .find(|decision| decision["action"] == "api_validation_coverage")
+            .context("API coverage summary missing")?;
+        assert_eq!(coverage["selectors"][0]["classification"], "inconclusive");
+        assert!(coverage["selectors"][0]["lineage"]["source_receipt"].is_object());
+        assert!(coverage["selectors"][0]["lineage"]["primary_response_receipt"].is_object());
+        assert!(run
+            .limitations
+            .iter()
+            .any(|limitation| limitation.contains("No negative coverage claim was made")));
+        let report: Value = read_json(&output.path().join("report.json"))?;
+        assert!(report["run"]["limitations"]
+            .as_array()
+            .is_some_and(|limitations| limitations.iter().any(|limitation| limitation
+                .as_str()
+                .is_some_and(|text| text.contains("No negative coverage claim was made")))));
+        for report_name in ["report.md", "report.html"] {
+            assert!(std::fs::read_to_string(output.path().join(report_name))?
+                .contains("No negative coverage claim was made"));
+        }
+        let sarif: Value = read_json(&output.path().join("report.sarif"))?;
+        let coverage = sarif["runs"][0]["properties"]["decisions"]
+            .as_array()
+            .and_then(|decisions| {
+                decisions
+                    .iter()
+                    .find(|decision| decision["action"] == "api_validation_coverage")
+            })
+            .context("SARIF inconclusive API coverage missing")?;
+        assert_eq!(coverage["selectors"][0]["classification"], "inconclusive");
+        assert_eq!(
+            coverage["negative_coverage_claimed_for_inconclusive"],
+            false
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn unsupported_api_schema_omission_is_inconclusive_and_visible_in_normal_reports(
+    ) -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("unsupported", r#"{"id":7}"#, false).await?;
+        assert!(!run.findings.iter().any(|finding| matches!(
+            finding.candidate.proof,
+            Proof::ApiResponseContractViolation { .. }
+        )));
+        let coverage = run
+            .decisions
+            .iter()
+            .find(|decision| decision["action"] == "api_validation_coverage")
+            .context("API coverage summary missing")?;
+        assert_eq!(coverage["selectors"][0]["classification"], "inconclusive");
+        let reasons = serde_json::to_string(&coverage["selectors"][0]["reasons"])?;
+        assert!(reasons.contains("unsupported_schema"));
+        assert!(reasons.contains("oneOf"));
+        let report: Value = read_json(&output.path().join("report.json"))?;
+        assert!(
+            serde_json::to_string(&report["run"]["limitations"])?.contains("unsupported_schema")
+        );
+        for report_name in ["report.md", "report.html"] {
+            let rendered = std::fs::read_to_string(output.path().join(report_name))?;
+            assert!(rendered.contains("unsupported_schema"));
+            assert!(rendered.contains("oneOf"));
+            assert!(rendered.contains("No negative coverage claim was made"));
+        }
+        let sarif: Value = read_json(&output.path().join("report.sarif"))?;
+        assert!(
+            serde_json::to_string(&sarif["runs"][0]["properties"]["decisions"])?
+                .contains("unsupported_schema")
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_validation_resumes_primary_checkpoint_with_one_distinct_replay() -> Result<()> {
+        let output = tempfile::tempdir()?;
+        let pause = Arc::new(AtomicBool::new(false));
+        let (base, count, server) = api_fixture(
+            "json",
+            r#"{"id":"wrong-type"}"#,
+            Some(pause.clone()),
+            false,
+            None,
+        )
+        .await?;
+        let source_url = format!("{base}/openapi.json");
+        let discovery_plan =
+            loopback_discovery_plan(&source_url, "api-resume-discovery")?.canonicalized()?;
+        let bounds = api_validation::ValidationBounds {
+            max_document_bytes: API_SCHEMA_DEFAULT_MAX_RESPONSE_BYTES,
+            ..Default::default()
+        };
+        let api_plan = ApiValidationPlan {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            plan_id: "api-resume".into(),
+            selectors: vec![OperationSelector {
+                discovery_plan_hash: discovery_plan.fingerprint()?,
+                openapi_source_url: source_url.clone(),
+                method: SafeMethod::Get,
+                path: "/api/users".into(),
+                operation_id: Some("listUsers".into()),
+            }],
+            bounds,
+        };
+        let discovery_path = output.path().join("operator-discovery.json");
+        let api_path = output.path().join("operator-api-validation.json");
+        write_json(&discovery_path, &discovery_plan)?;
+        write_json(&api_path, &api_plan)?;
+        let mut config = default_config(Mode::Blackbox, vec![source_url], output.path().into())?;
+        config.discovery_plan = Some(discovery_path);
+        config.api_validation_plan = Some(api_path);
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        engine.control.pause = pause;
+        let paused = engine.run().await?;
+        assert_eq!(paused.status, RunStatus::Paused);
+        assert_eq!(count.load(Ordering::SeqCst), 1);
+        drop(engine);
+
+        let mut resumed = Engine::resume(output.path())?;
+        let completed = resumed.run().await?;
+        server.abort();
+        assert_eq!(completed.status, RunStatus::Complete);
+        assert_eq!(count.load(Ordering::SeqCst), 2);
+        let api_receipts = resumed
+            .runtime
+            .evidence
+            .manifest()?
+            .into_iter()
+            .filter(|receipt| matches!(receipt.output.action, ToolAction::ApiSchemaProbe { .. }))
+            .collect::<Vec<_>>();
+        assert_eq!(api_receipts.len(), 2);
+        assert_ne!(api_receipts[0].id, api_receipts[1].id);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_api_probe_intent_recovers_exact_sealed_receipt_without_network_repeat(
+    ) -> Result<()> {
+        let (output, mut engine, plan, discovery, requests, server) = paused_api_fixture().await?;
+        let (stage, intents_dir, selector, action) =
+            paused_api_probe_parts(output.path(), &plan, &discovery)?;
+        let operation_stage = stage_key(
+            "api-schema-probe",
+            &(&stage, ApiProbePhase::Primary, &selector, &action),
+        )?;
+        let intent_path =
+            intents_dir.join(format!("intent-{}.json", hash(operation_stage.as_bytes())));
+        assert!(intent_path.exists());
+        std::fs::remove_file(&intent_path)?;
+        engine.control.pause.store(false, Ordering::SeqCst);
+
+        let recovered = engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Primary,
+                &selector,
+                action,
+                &intents_dir,
+            )
+            .await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let recorded: ApiProbeOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recorded.state, DiscoveryIntentState::Receipted);
+        assert_eq!(recorded.receipt_id.as_deref(), Some(recovered.id.as_str()));
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_api_probe_intent_without_receipt_is_indeterminate_and_never_repeated(
+    ) -> Result<()> {
+        let (output, mut engine, plan, discovery, requests, server) = paused_api_fixture().await?;
+        let (stage, intents_dir, selector, action) =
+            paused_api_probe_parts(output.path(), &plan, &discovery)?;
+        let operation_stage = stage_key(
+            "api-schema-probe",
+            &(&stage, ApiProbePhase::Replay, &selector, &action),
+        )?;
+        let intent_path =
+            intents_dir.join(format!("intent-{}.json", hash(operation_stage.as_bytes())));
+        write_json(
+            &intent_path,
+            &ApiProbeOperationIntent::pending(
+                operation_stage,
+                ApiProbePhase::Replay,
+                selector.clone(),
+                action.clone(),
+            ),
+        )?;
+        engine.control.pause.store(false, Ordering::SeqCst);
+
+        assert!(engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Replay,
+                &selector,
+                action,
+                &intents_dir,
+            )
+            .await
+            .is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        let recorded: ApiProbeOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recorded.state, DiscoveryIntentState::Indeterminate);
+        let receipt = engine.runtime.evidence.get(
+            recorded
+                .receipt_id
+                .as_deref()
+                .context("indeterminate API probe receipt missing")?,
+        )?;
+        assert!(!receipt.output.successful);
+        assert_eq!(receipt.output.data["indeterminate_after_crash"], true);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_api_probe_intent_recovers_exact_post_send_receipt_without_network_repeat(
+    ) -> Result<()> {
+        let (output, mut engine, plan, discovery, requests, server) = paused_api_fixture().await?;
+        let (stage, intents_dir, selector, action) =
+            paused_api_probe_parts(output.path(), &plan, &discovery)?;
+        let operation_stage = stage_key(
+            "api-schema-probe",
+            &(&stage, ApiProbePhase::Replay, &selector, &action),
+        )?;
+        let intent_path =
+            intents_dir.join(format!("intent-{}.json", hash(operation_stage.as_bytes())));
+        write_json(
+            &intent_path,
+            &ApiProbeOperationIntent::pending(
+                operation_stage,
+                ApiProbePhase::Replay,
+                selector.clone(),
+                action.clone(),
+            ),
+        )?;
+        let sealed = engine
+            .tool(ApiProbePhase::Replay.actor(), action.clone())
+            .await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        engine.control.pause.store(false, Ordering::SeqCst);
+
+        let recovered = engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Replay,
+                &selector,
+                action,
+                &intents_dir,
+            )
+            .await?;
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        assert_eq!(recovered.id, sealed.id);
+        let recorded: ApiProbeOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recorded.state, DiscoveryIntentState::Receipted);
+        assert_eq!(recorded.receipt_id.as_deref(), Some(sealed.id.as_str()));
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_api_probe_requires_explicit_one_shot_retry() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (output, mut engine, plan, discovery, requests, server) = paused_api_fixture().await?;
+        let (stage, intents_dir, selector, action) =
+            paused_api_probe_parts(output.path(), &plan, &discovery)?;
+        server.abort();
+        let _ = server.await;
+        engine.control.pause.store(false, Ordering::SeqCst);
+        assert!(engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Replay,
+                &selector,
+                action.clone(),
+                &intents_dir,
+            )
+            .await
+            .is_err());
+        let operation_stage = stage_key(
+            "api-schema-probe",
+            &(&stage, ApiProbePhase::Replay, &selector, &action),
+        )?;
+        let failed_stage = format!("failed:{operation_stage}");
+        assert!(engine.snapshot.completed_targets.contains(&failed_stage));
+        let receipt_count = engine.runtime.evidence.manifest()?.len();
+        assert!(engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Replay,
+                &selector,
+                action.clone(),
+                &intents_dir,
+            )
+            .await
+            .is_err());
+        assert_eq!(engine.runtime.evidence.manifest()?.len(), receipt_count);
+
+        assert_eq!(engine.retry_failed_stages()?, 1);
+        let address = match &action {
+            ToolAction::ApiSchemaProbe { url, .. } => {
+                let url = url::Url::parse(url)?;
+                format!(
+                    "{}:{}",
+                    url.host_str().context("API retry host missing")?,
+                    url.port_or_known_default()
+                        .context("API retry port missing")?
+                )
+            }
+            _ => anyhow::bail!("API retry fixture action changed type"),
+        };
+        let listener = tokio::net::TcpListener::bind(&address).await?;
+        let retry_requests = Arc::new(AtomicUsize::new(0));
+        let retry_counter = retry_requests.clone();
+        let retry_server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                retry_counter.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0_u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+                let body = r#"{"id":"wrong-type"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        let retried = engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Replay,
+                &selector,
+                action.clone(),
+                &intents_dir,
+            )
+            .await?;
+        retry_server.await?;
+        assert!(retried.output.successful);
+        assert_eq!(retry_requests.load(Ordering::SeqCst), 1);
+        assert!(engine.snapshot.decisions.iter().any(|decision| {
+            decision["action"] == "retry_stage_consumed" && decision["stage"] == failed_stage
+        }));
+        let recovered = engine
+            .execute_api_probe(
+                &stage,
+                ApiProbePhase::Replay,
+                &selector,
+                action,
+                &intents_dir,
+            )
+            .await?;
+        assert_eq!(recovered.id, retried.id);
+        assert_eq!(retry_requests.load(Ordering::SeqCst), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tampered_bound_api_plan_fails_resume_before_new_network_io() -> Result<()> {
+        let (output, engine, _plan, _discovery, requests, server) = paused_api_fixture().await?;
+        drop(engine);
+        let plan_path = output.path().join("configured-api-validation-plan.json");
+        let mut plan: ApiValidationPlan = read_json(&plan_path)?;
+        plan.plan_id = "tampered-plan".into();
+        write_json(&plan_path, &plan)?;
+
+        assert!(Engine::resume(output.path()).is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tampered_persisted_api_contracts_fail_resume_before_new_network_io() -> Result<()> {
+        let (output, engine, plan, _discovery, requests, server) = paused_api_fixture().await?;
+        drop(engine);
+        let contracts_path = output
+            .path()
+            .join("api-validation")
+            .join(&plan.fingerprint()?[..24])
+            .join("contracts.json");
+        write_json(&contracts_path, &Vec::<NormalizedOpenApi>::new())?;
+
+        let mut resumed = Engine::resume(output.path())?;
+        resumed.control.pause.store(false, Ordering::SeqCst);
+        assert!(resumed.run().await.is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tampered_api_artifact_fails_retest_before_new_network_io() -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        let plan_hash = match &finding.candidate.proof {
+            Proof::ApiResponseContractViolation { plan_hash, .. } => plan_hash,
+            _ => unreachable!(),
+        };
+        let artifact_path = output
+            .path()
+            .join("api-validation")
+            .join(&plan_hash[..24])
+            .join("artifact.json");
+        let mut artifact: Value = read_json(&artifact_path)?;
+        artifact["plan_hash"] = Value::String("0".repeat(64));
+        write_json(&artifact_path, &artifact)?;
+
+        assert!(retest(output.path(), &finding.id, true).await.is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tampered_api_receipt_fails_retest_before_new_network_io() -> Result<()> {
+        let (output, run, requests, server) =
+            run_api_fixture("json", r#"{"id":"wrong-type"}"#, false).await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| {
+                matches!(
+                    finding.candidate.proof,
+                    Proof::ApiResponseContractViolation { .. }
+                )
+            })
+            .context("API violation finding missing")?;
+        let primary_receipt_id = finding
+            .candidate
+            .receipt_ids
+            .get(1)
+            .context("API primary receipt missing")?;
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            &run.id,
+            Redactor::default(),
+        )?;
+        let mut receipt = evidence.get(primary_receipt_id)?;
+        receipt.output.data["status"] = json!(201);
+        write_json(
+            &output
+                .path()
+                .join("receipts")
+                .join(format!("{primary_receipt_id}.json")),
+            &receipt,
+        )?;
+
+        assert!(retest(output.path(), &finding.id, true).await.is_err());
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+        server.abort();
+        Ok(())
     }
     #[test]
     fn live_cloud_iam_artifact_requires_common_receipt_lineage() -> Result<()> {
@@ -4186,6 +6971,38 @@ mod tests {
         assert_eq!(artifact.audit_receipts, receipts);
         assert_eq!(artifact.graph.edges.len(), 3);
         Ok(())
+    }
+
+    #[test]
+    fn api_contract_receipts_never_seed_attack_chain_surface() {
+        let receipt = Receipt {
+            schema_version: SCHEMA_VERSION,
+            id: "api-receipt".into(),
+            run_id: "run-test".into(),
+            actor: "api-schema-primary".into(),
+            captured_ms: 1,
+            content_hash: "a".repeat(64),
+            output: ToolOutput {
+                action: ToolAction::ApiSchemaProbe {
+                    plan_hash: "b".repeat(64),
+                    contract_hash: "c".repeat(64),
+                    probe_id: format!("api-schema-{}", "d".repeat(64)),
+                    method: ApiProbeMethod::Get,
+                    url: "https://example.test/api".into(),
+                    allowed_origins: vec!["https://example.test".into()],
+                    max_response_bytes: 1_024,
+                    max_shape_nodes: 128,
+                    max_shape_depth: 8,
+                    max_properties: 128,
+                    max_array_items: 128,
+                },
+                successful: true,
+                data: json!({}),
+                truncated: false,
+            },
+            expert_override: None,
+        };
+        assert!(!receipt_contributes_chain_surface(&receipt));
     }
 
     #[tokio::test]
@@ -4262,6 +7079,79 @@ mod tests {
                             && overrides.controls.contains(&Control::SecretRedaction)
                     })
         }));
+        Ok(())
+    }
+
+    #[test]
+    fn api_selector_secrets_are_rejected_before_bound_plan_or_manifest_persistence() -> Result<()> {
+        let input = tempfile::tempdir()?;
+        let safe_source = "http://127.0.0.1:32123/openapi.json";
+        let secret_source = "http://127.0.0.1:32123/openapi.json?to%6ben=operator-api-secret";
+        let discovery =
+            loopback_discovery_plan(safe_source, "api-secret-discovery")?.canonicalized()?;
+        let api = ApiValidationPlan {
+            schema_version: API_VALIDATION_SCHEMA_VERSION,
+            plan_id: "api-secret-selector".into(),
+            selectors: vec![OperationSelector {
+                discovery_plan_hash: discovery.fingerprint()?,
+                openapi_source_url: secret_source.into(),
+                method: SafeMethod::Get,
+                path: "/api/users".into(),
+                operation_id: None,
+            }],
+            bounds: api_validation::ValidationBounds::default(),
+        };
+        let discovery_path = input.path().join("discovery.json");
+        let api_path = input.path().join("api.json");
+        write_json(&discovery_path, &discovery)?;
+        write_json(&api_path, &api)?;
+
+        let make_config = |output: &Path, controls: Vec<Control>| -> Result<RunConfig> {
+            let mut config =
+                default_config(Mode::Blackbox, vec![safe_source.into()], output.into())?;
+            config.authorized = true;
+            config.discovery_plan = Some(discovery_path.clone());
+            config.api_validation_plan = Some(api_path.clone());
+            if !controls.is_empty() {
+                config.overrides = ExpertOverrides {
+                    controls,
+                    reason: "Explicit API selector secret fixture persistence".into(),
+                    actor: "test-operator".into(),
+                    acknowledged: true,
+                    ..Default::default()
+                };
+            }
+            Ok(config)
+        };
+
+        for controls in [
+            vec![],
+            vec![Control::SecretExposure],
+            vec![Control::SecretRedaction],
+        ] {
+            let output = tempfile::tempdir()?;
+            assert!(Engine::new(make_config(output.path(), controls)?).is_err());
+            assert!(!output
+                .path()
+                .join("configured-api-validation-plan.json")
+                .exists());
+            assert!(!output.path().join("run-manifest.json").exists());
+            let persisted = std::fs::read_dir(output.path())?
+                .filter_map(std::result::Result::ok)
+                .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+                .collect::<String>();
+            assert!(!persisted.contains("operator-api-secret"));
+        }
+
+        let output = tempfile::tempdir()?;
+        let engine = Engine::new(make_config(
+            output.path(),
+            vec![Control::SecretExposure, Control::SecretRedaction],
+        )?)?;
+        let bound =
+            std::fs::read_to_string(output.path().join("configured-api-validation-plan.json"))?;
+        assert!(bound.contains("operator-api-secret"));
+        drop(engine);
         Ok(())
     }
 
