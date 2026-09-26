@@ -137,7 +137,7 @@ async fn rate_and_concurrency_overrides_change_actual_execution_scheduling() -> 
                 2
             };
             scope.requests_per_second = if control == Control::RateLimit {
-                5
+                2
             } else {
                 1000
             };
@@ -147,17 +147,29 @@ async fn rate_and_concurrency_overrides_change_actual_execution_scheduling() -> 
                 ExpertOverrides::default()
             };
             let r = runtime(root.path(), scope, overrides)?;
+            let started = std::time::Instant::now();
             let (a, b) = tokio::join!(
                 r.execute("a", ToolAction::HttpGet { url: url.clone() }),
                 r.execute("b", ToolAction::HttpGet { url: url.clone() })
             );
+            let elapsed = started.elapsed();
             assert!(a?.output.successful && b?.output.successful);
-            let expected = if enabled { 2 } else { 1 };
-            assert_eq!(
-                max_in_flight.load(Ordering::SeqCst),
-                expected,
-                "{control:?} scheduling with bypass={enabled}"
-            );
+            if control == Control::RateLimit && !enabled {
+                // Rate limiting guarantees a reservation/start delay, not
+                // in-flight serialization. Under a loaded runner the first
+                // response can legitimately remain active after that delay.
+                assert!(
+                    elapsed >= std::time::Duration::from_millis(450),
+                    "rate-limited pair completed before the configured spacing: {elapsed:?}"
+                );
+            } else {
+                let expected = if enabled { 2 } else { 1 };
+                assert_eq!(
+                    max_in_flight.load(Ordering::SeqCst),
+                    expected,
+                    "{control:?} scheduling with bypass={enabled}"
+                );
+            }
             server.abort();
         }
     }

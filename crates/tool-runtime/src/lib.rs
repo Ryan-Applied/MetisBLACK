@@ -878,6 +878,8 @@ mod tests {
         let url = format!("http://{}/", listener.local_addr()?);
         let server = tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
+                let mut request = [0u8; 4096];
+                let _ = stream.read(&mut request).await;
                 let response = b"HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: 2\r\nConnection: close\r\n\r\n\xff\xfe";
                 let _ = stream.write_all(response).await;
             }
