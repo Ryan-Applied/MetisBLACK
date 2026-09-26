@@ -193,6 +193,71 @@ impl Policy {
             | ToolAction::AiPrompt { url, .. } => {
                 self.check_url(url)?;
             }
+            ToolAction::WebDiscoveryFetch {
+                plan_hash,
+                request_id,
+                url,
+                allowed_origins,
+                max_response_bytes,
+            } => {
+                ensure!(
+                    plan_hash.len() == 64 && plan_hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                    "web discovery plan hash must be SHA-256"
+                );
+                ensure!(
+                    request_id.starts_with("discovery-")
+                        && request_id.len() == 74
+                        && request_id[10..]
+                            .bytes()
+                            .all(|byte| byte.is_ascii_hexdigit()),
+                    "web discovery request id is invalid"
+                );
+                ensure!(
+                    !allowed_origins.is_empty() && allowed_origins.len() <= 256,
+                    "web discovery requires 1..=256 exact allowed origins"
+                );
+                ensure!(
+                    (1..=16 * 1024 * 1024).contains(max_response_bytes),
+                    "web discovery response bound exceeds the hard ceiling"
+                );
+                self.gate(
+                    usize::try_from(*max_response_bytes)? <= self.scope.max_response_bytes,
+                    Control::DataSampling,
+                    "web discovery response bound exceeds the central response sampling limit",
+                )?;
+                let target = self.check_url(url)?;
+                let target_origin = target.origin().ascii_serialization();
+                let mut canonical = std::collections::BTreeSet::new();
+                for origin in allowed_origins {
+                    let parsed = Url::parse(origin).context("invalid web discovery origin")?;
+                    ensure!(
+                        matches!(parsed.scheme(), "http" | "https")
+                            && parsed.host_str().is_some()
+                            && parsed.username().is_empty()
+                            && parsed.password().is_none()
+                            && parsed.path() == "/"
+                            && parsed.query().is_none()
+                            && parsed.fragment().is_none()
+                            && parsed.origin().ascii_serialization() == *origin,
+                        "web discovery origins must be canonical exact HTTP(S) origins"
+                    );
+                    ensure!(
+                        canonical.insert(origin.clone()),
+                        "duplicate web discovery origin"
+                    );
+                }
+                ensure!(
+                    canonical.contains(target_origin.as_str()),
+                    "web discovery target is outside the action's exact allowed origins"
+                );
+            }
+            ToolAction::OpenRedirectProbe {
+                endpoint,
+                parameter,
+                canary,
+            } => {
+                self.open_redirect_probe_url(endpoint, parameter, canary)?;
+            }
             ToolAction::HttpRequest { url, method, .. } => {
                 self.check_url(url)?;
                 if !["GET", "HEAD", "OPTIONS"].contains(&method.to_ascii_uppercase().as_str()) {
@@ -282,6 +347,31 @@ impl Policy {
         }
         Ok(())
     }
+    /// Validate both the declared endpoint and the exact URL that the runtime
+    /// will request, then return that URL. Syntax invariants are deliberately
+    /// not bypassable by expert overrides.
+    pub fn open_redirect_probe_url(
+        &self,
+        endpoint: &str,
+        parameter: &str,
+        canary: &str,
+    ) -> Result<Url> {
+        domain::validate_open_redirect_inputs(parameter, canary)?;
+        let canary_url = domain::open_redirect_canary_url(canary)?;
+        let mut probe = self.check_url(endpoint)?;
+        let preserved = probe
+            .query_pairs()
+            .filter(|(key, _)| key != parameter)
+            .map(|(key, value)| (key.into_owned(), value.into_owned()))
+            .collect::<Vec<_>>();
+        probe.set_query(None);
+        {
+            let mut query = probe.query_pairs_mut();
+            query.extend_pairs(preserved.iter().map(|(key, value)| (key, value)));
+            query.append_pair(parameter, &canary_url);
+        }
+        self.check_url(probe.as_str())
+    }
     pub fn check_url(&self, raw: &str) -> Result<Url> {
         let u = Url::parse(raw).context("invalid target URL")?;
         ensure!(
@@ -334,15 +424,29 @@ impl Policy {
                 "URL path not in an explicit network rule",
             )?;
         }
-        if let Some(q) = u.query() {
+        let secret_query = u.query_pairs().any(|(key, _)| {
+            [
+                "token",
+                "password",
+                "secret",
+                "api_key",
+                "apikey",
+                "access_token",
+                "refresh_token",
+                "client_secret",
+            ]
+            .contains(&key.to_ascii_lowercase().as_str())
+        });
+        if secret_query {
             self.gate(
-                !q.to_ascii_lowercase().split('&').any(|p| {
-                    ["token=", "password=", "secret=", "api_key="]
-                        .iter()
-                        .any(|k| p.starts_with(k))
-                }),
+                false,
                 Control::SecretExposure,
                 "secrets in URL query prohibited",
+            )?;
+            self.gate(
+                false,
+                Control::SecretRedaction,
+                "secret-bearing URL actions require a secret_redaction override so immutable action lineage is not mutated",
             )?;
         }
         Ok(u)
@@ -622,6 +726,110 @@ mod tests {
         })?;
         assert!(p.check_path(&d.path().join("a.rs")).is_ok());
         assert!(p.check_path(&outside.path().join("a.rs")).is_err());
+        Ok(())
+    }
+    #[test]
+    fn open_redirect_probe_checks_declared_and_constructed_urls() -> Result<()> {
+        let mut scope = scope_for_url("https://example.test/allowed")?;
+        scope.network[0].paths = vec!["/allowed".into()];
+        let policy = Policy::new(scope.clone())?;
+        let probe = policy.open_redirect_probe_url(
+            "https://example.test/allowed?keep=value&next=old",
+            "next",
+            "redirect-canary-01",
+        )?;
+        assert_eq!(
+            probe.as_str(),
+            "https://example.test/allowed?keep=value&next=https%3A%2F%2Fmetisblack.invalid%2Fredirect-canary-01"
+        );
+        assert_eq!(
+            probe.query_pairs().filter(|(key, _)| key == "next").count(),
+            1
+        );
+
+        assert!(policy
+            .open_redirect_probe_url("https://example.test/outside", "next", "redirect-canary-01")
+            .is_err());
+        assert!(policy
+            .open_redirect_probe_url(
+                "https://example.test/allowed?token=fixture-secret",
+                "next",
+                "redirect-canary-01"
+            )
+            .is_err());
+        // The constructed URL is checked too: a secret-shaped query key is
+        // rejected even when it was absent from the declared endpoint.
+        assert!(policy
+            .open_redirect_probe_url(
+                "https://example.test/allowed",
+                "token",
+                "redirect-canary-01"
+            )
+            .is_err());
+
+        let all = ExpertOverrides {
+            unsafe_all: true,
+            reason: "Explicit test-only unrestricted policy".into(),
+            actor: "test-operator".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let unrestricted = Policy::with_overrides(scope.clone(), all.clone())?;
+        assert!(unrestricted
+            .open_redirect_probe_url(
+                "https://example.test/allowed",
+                "bad&key",
+                "redirect-canary-01"
+            )
+            .is_err());
+        assert!(unrestricted
+            .open_redirect_probe_url("https://example.test/allowed", "next", "UPPERCASE-CANARY")
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn web_discovery_action_has_an_exact_non_bypassable_origin_boundary() -> Result<()> {
+        let scope = scope_for_url("https://example.test/")?;
+        let action = ToolAction::WebDiscoveryFetch {
+            plan_hash: "a".repeat(64),
+            request_id: format!("discovery-{}", "b".repeat(64)),
+            url: "https://example.test/start".into(),
+            allowed_origins: vec!["https://example.test".into()],
+            max_response_bytes: 1024,
+        };
+        Policy::new(scope.clone())?.check_action(&action)?;
+        let mut sampled_scope = scope.clone();
+        sampled_scope.max_response_bytes = 512;
+        assert!(Policy::new(sampled_scope)?.check_action(&action).is_err());
+
+        let outside = ToolAction::WebDiscoveryFetch {
+            plan_hash: "a".repeat(64),
+            request_id: format!("discovery-{}", "b".repeat(64)),
+            url: "https://example.test/start".into(),
+            allowed_origins: vec!["https://other.test".into()],
+            max_response_bytes: 1024,
+        };
+        assert!(Policy::new(scope.clone())?.check_action(&outside).is_err());
+        let oversized = ToolAction::WebDiscoveryFetch {
+            plan_hash: "a".repeat(64),
+            request_id: format!("discovery-{}", "b".repeat(64)),
+            url: "https://example.test/start".into(),
+            allowed_origins: vec!["https://example.test".into()],
+            max_response_bytes: 16 * 1024 * 1024 + 1,
+        };
+        let unrestricted = Policy::with_overrides(
+            scope,
+            ExpertOverrides {
+                unsafe_all: true,
+                reason: "Explicit policy-boundary regression".into(),
+                actor: "test-operator".into(),
+                acknowledged: true,
+                ..Default::default()
+            },
+        )?;
+        assert!(unrestricted.check_action(&outside).is_err());
+        assert!(unrestricted.check_action(&oversized).is_err());
         Ok(())
     }
 }

@@ -1,8 +1,60 @@
 # Live runtime workflows
 
-MetisBLACK has four opt-in production-facing execution paths. They share the
-run's authorization, scope, budget, cancellation, redaction, receipt, and
-override policy. None of them turns model output into confirmed evidence.
+MetisBLACK has several opt-in live execution paths. They share the run's
+authorization, scope, budget, cancellation, redaction, receipt, and override
+policy. None of them turns model output into confirmed evidence.
+
+## Bounded web discovery and open-redirect validation
+
+Black-box and grey-box runs create a finite default discovery plan from the target.
+For explicit seeds, allowed origins and bounds, pass the strict versioned example:
+
+```bash
+metisblack run http://127.0.0.1:8080/ \
+  --discovery-plan examples/web-discovery-plan.json \
+  --authorize --output runs/web-discovery
+```
+
+Each frontier item is a typed `WebDiscoveryFetch`: central URL/DNS/private-address,
+authorization, request/rate/concurrency/timeout and response bounds apply, and the
+plan's exact allowed origins are an additional non-bypassable acquisition boundary.
+The fetch records one response with redirects disabled. The deterministic parser
+can derive same-plan-origin HTML links and scripts, form shapes without values,
+robots and sitemap entries, bounded JavaScript URL hints, and OpenAPI v2/v3
+declarations. It never executes JavaScript, submits a form, follows a redirect,
+resolves a remote schema reference, or invokes a declared API operation.
+
+The run stores `plan.json`, an atomic `checkpoint.json`, `artifact.json` and
+`stage.json` under `web-discovery/<plan-hash>/`. Observed, declared and omitted
+surfaces are distinct and carry plan or receipt lineage. Before completion the
+orchestrator reconstructs the artifact from the sealed receipts and compares the
+canonical result. Reports expose the sanitized artifact path/hash/counts/gaps as a
+run decision; discovery alone creates no vulnerability finding or chain edge.
+Before every request the run stores a durable operation intent. On restart an
+exact sealed receipt is recovered without another request; an unresolved pending
+intent is recorded as indeterminate and never silently retried.
+
+Bounds above the defaults require the audited `data_sampling` override, but still
+cannot exceed the schema's finite ceilings. The example plan points to an owned
+loopback fixture; replace both its seeds/origin and the command target together for
+an authorized lab.
+
+For discovered URLs that already contain query parameters, the orchestrator can
+run a bounded open-redirect check (three parameter probes by default, at most 20
+with the sampling override). The typed action replaces one parameter with a fresh
+opaque `https://metisblack.invalid/` canary, sends one GET, and captures the first
+response without following the redirect or resolving/contacting the destination.
+Acquisition success is not a finding. The harness requires an allowed redirect
+status and exact canary `Location`, then independently replays with another fresh
+canary before confirmation. Retest likewise uses a fresh canary; transport or
+malformed-response failures remain inconclusive. This validates only server-side
+arbitrary redirect semantics, not phishing, OAuth theft, account takeover, XSS,
+SSRF or a broader exploit chain.
+
+An indeterminate probe records a failed stage and makes no negative coverage
+claim. Resume fails closed until an operator explicitly selects
+`--retry-failed-stages`; that one-shot audited decision permits one fresh-canary
+attempt. A positive stage is completed only after the finding is persisted.
 
 ## Browser automation
 
@@ -193,7 +245,7 @@ the result. Cloud templates currently remain disabled in the shared orchestrator
 unless a typed provider-specific replay adapter is registered; live cloud
 discovery is not silently treated as exploit authorization.
 
-All four paths can be configured in one strict `RunConfig` file. Use `--dry-run`
+These paths can be configured in one strict `RunConfig` file. Use `--dry-run`
 to inspect the resolved configuration before any target or provider I/O.
 
 Successful cloud and model-panel stages are content-hash checkpointed and are

@@ -25,6 +25,7 @@ ratatui = "0.30.2"
 crossterm = "0.29"
 futures = "0.3"
 zeroize = "1"
+web-discovery = { path = "crates/web-discovery" }
 
 [profile.release]
 lto = "thin"

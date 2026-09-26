@@ -9,12 +9,12 @@ Passed:
 
 ```text
 cargo fmt --all -- --check
-cargo check --workspace --all-targets --all-features --locked --offline
-cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings
-cargo test --workspace --all-features --locked --offline
+cargo check --locked --workspace --all-targets --all-features
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace --all-features
 ```
 
-The current suite passed **148 tests**, with no failed or ignored tests. Coverage
+The current suite passed **197 tests**, with no failed or ignored tests. Coverage
 includes the exhaustive 32-control registry (default enforcement, exact override,
 unrelated-control isolation and unsafe-all), native provider HTTP tool calling,
 real tool receipts, independent replay, recon/specialist/reviewer/refuter scheduling,
@@ -41,6 +41,14 @@ cycle-safe AWS/Azure/GCP IAM reachability whose traversable edges require common
 receipt lineage. Orchestrator tests cover source-flow state semantics and IAM artifact
 lineage, and the shipped browser-workflow example is schema-tested.
 
+The E04 foundation adds strict deterministic web-discovery contracts, all finite
+cap fixtures, no-redirect one-response acquisition, durable pre-send intents,
+missing/pending receipt recovery, canonical run paths, secret-seed policy, and
+mid-frontier pause/cancel resume. The open-redirect validator has typed exact
+observations, fresh-canary replay/retest, exact intent receipt binding, positive
+finding crash recovery, and explicit failed-stage one-shot retry. These paths use
+owned loopback fixtures only and do not claim broad web exploitation coverage.
+
 The documented local demo completed at `runs/verified-demo`: two low-severity
 empirically confirmed missing-header observations, linked independent replay
 receipts, and Markdown/HTML/JSON/SARIF reports. This directory is ignored by Git.
@@ -51,8 +59,10 @@ One incomplete-heading warning was retained for `meta/role_pentestfull`.
 CI defines locked all-feature platform lanes for Ubuntu, macOS 14 arm64 and
 Windows in addition to the strict quality and dependency-policy jobs. GitHub
 Actions run
-[`36265174263`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265174263)
-passed all five jobs from commit `72676d3` using the declared Rust 1.88 MSRV.
+[`36265458472`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265458472)
+passed all five jobs from commit `8b37577` using the declared Rust 1.88 MSRV.
+The E04 changes documented above are newer than that run and still require a
+final-head CI record.
 
 Not executed locally: `cargo deny check` (cargo-deny is not installed), live
 provider authentication, real provider-cloud accounts, a real WebDriver,

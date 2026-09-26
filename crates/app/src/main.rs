@@ -45,6 +45,9 @@ struct Cli {
     /// Typed exploit-chain JSON configuration.
     #[arg(long, global = true)]
     chains: Option<PathBuf>,
+    /// Strict bounded web-surface discovery plan JSON.
+    #[arg(long, global = true)]
+    discovery_plan: Option<PathBuf>,
     #[arg(long, global = true)]
     fail_on: Option<String>,
     #[arg(long, global = true)]
@@ -265,6 +268,9 @@ fn configure(cli: &Cli, mode: Mode, targets: Vec<String>) -> Result<RunConfig> {
     }
     if let Some(path) = &cli.chains {
         c.chains = Some(storage::read_json::<ChainRunConfig>(path)?);
+    }
+    if let Some(path) = &cli.discovery_plan {
+        c.discovery_plan = Some(path.clone());
     }
     Ok(c)
 }

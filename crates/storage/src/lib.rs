@@ -72,6 +72,22 @@ fn create_private(path: &Path) -> Result<std::fs::File> {
     Ok(o.open(path)?)
 }
 
+#[cfg(unix)]
+fn sync_parent_directory(path: &Path) -> Result<()> {
+    fs::File::open(path)
+        .with_context(|| format!("open parent directory for sync: {}", path.display()))?
+        .sync_all()
+        .with_context(|| format!("sync parent directory: {}", path.display()))
+}
+
+#[cfg(not(unix))]
+fn sync_parent_directory(_path: &Path) -> Result<()> {
+    // Rust's portable File API cannot open directory handles on every
+    // platform. The file contents are still synced before the atomic rename;
+    // platforms with portable directory handles additionally sync the parent.
+    Ok(())
+}
+
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().context("file requires parent directory")?;
     secure_dir(parent)?;
@@ -87,6 +103,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
         f.write_all(bytes)?;
         f.sync_all()?;
         fs::rename(&tmp, path)?;
+        sync_parent_directory(parent)?;
         Ok(())
     })();
     if result.is_err() {
@@ -136,7 +153,7 @@ impl Redactor {
         let rules=RULES.get_or_init(||[
             r"(?is)-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
             r#"(?i)(?:authorization|proxy-authorization|cookie|set-cookie)\s*[:=]\s*[^\r\n]+"#,
-            r#"(?i)(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret)\s*[\"']?\s*[:=]\s*[\"']?[^\s\"',;}]+"#,
+            r#"(?i)(?:password|passwd|secret|api[_-]?key|token|access[_-]?token|refresh[_-]?token|client[_-]?secret)\s*[\"']?\s*[:=]\s*[\"']?[^\s\"',;}]+"#,
             r"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b",
             r"\b(?:sk-|ghp_|github_pat_)[A-Za-z0-9_-]{16,}\b",
             r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b",
@@ -149,7 +166,7 @@ impl Redactor {
         for rule in rules {
             s = rule.replace_all(&s, "[REDACTED]").into_owned();
         }
-        s
+        redact_query_secret_values(&s)
     }
     pub fn value(&self, value: &mut serde_json::Value) {
         if self.disabled {
@@ -193,6 +210,80 @@ impl Redactor {
         self.value(&mut v);
         Ok(serde_json::from_value(v)?)
     }
+}
+
+fn redact_query_secret_values(input: &str) -> String {
+    let mut output = input.to_owned();
+    let mut cursor = 0;
+    while cursor < output.len() {
+        let Some((offset, _)) = output[cursor..]
+            .char_indices()
+            .find(|(_, character)| matches!(character, '?' | '&'))
+        else {
+            break;
+        };
+        let key_start = cursor + offset + 1;
+        let segment_end = output[key_start..]
+            .char_indices()
+            .find(|(_, character)| {
+                matches!(character, '&' | '#' | '\'' | '"' | '<' | '>') || character.is_whitespace()
+            })
+            .map(|(offset, _)| key_start + offset)
+            .unwrap_or(output.len());
+        let Some(equals_offset) = output[key_start..segment_end].find('=') else {
+            cursor = segment_end.max(key_start);
+            continue;
+        };
+        let equals = key_start + equals_offset;
+        let key = &output[key_start..equals];
+        let decoded = percent_decode_query_key(key);
+        let sensitive = decoded.as_deref().is_some_and(|key| {
+            [
+                "token",
+                "password",
+                "secret",
+                "api_key",
+                "apikey",
+                "access_token",
+                "refresh_token",
+                "client_secret",
+            ]
+            .contains(&key.to_ascii_lowercase().as_str())
+        });
+        if sensitive {
+            let value_start = equals + 1;
+            output.replace_range(value_start..segment_end, "[REDACTED]");
+            cursor = value_start + "[REDACTED]".len();
+        } else {
+            cursor = segment_end.max(equals + 1);
+        }
+    }
+    output
+}
+
+fn percent_decode_query_key(input: &str) -> Option<String> {
+    let bytes = input.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'%' if index + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).ok()?;
+                decoded.push(u8::from_str_radix(hex, 16).ok()?);
+                index += 3;
+            }
+            b'%' => return None,
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8(decoded).ok()
 }
 
 pub struct Vault {
@@ -332,11 +423,13 @@ mod tests {
     fn redacts_nested_secrets() {
         let mut r = Redactor::default();
         r.register("unique-sensitive-value");
-        let mut v = serde_json::json!({"nested":{"password":"abc"},"message":"Authorization: Bearer xyz\nunique-sensitive-value"});
+        let mut v = serde_json::json!({"nested":{"password":"abc"},"message":"Authorization: Bearer xyz\nunique-sensitive-value\nhttps://example.test/callback?token=bare-query-secret&to%6ben=encoded-query-secret"});
         r.value(&mut v);
         assert!(!v.to_string().contains("xyz"));
         assert!(!v.to_string().contains("abc"));
         assert!(!v.to_string().contains("unique-sensitive-value"));
+        assert!(!v.to_string().contains("bare-query-secret"));
+        assert!(!v.to_string().contains("encoded-query-secret"));
     }
     #[test]
     fn hash_known_vector() {
@@ -348,5 +441,21 @@ mod tests {
     #[test]
     fn rejects_path_traversal() {
         assert!(safe_component("../../vault.key").is_err());
+    }
+    #[test]
+    fn atomic_write_replaces_content_without_leaving_staging_files() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("snapshot.json");
+
+        atomic_write(&path, b"first")?;
+        atomic_write(&path, b"second")?;
+
+        assert_eq!(fs::read(&path)?, b"second");
+        assert!(fs::read_dir(directory.path())?.all(|entry| {
+            entry
+                .map(|entry| !entry.file_name().to_string_lossy().starts_with(".write-"))
+                .unwrap_or(false)
+        }));
+        Ok(())
     }
 }

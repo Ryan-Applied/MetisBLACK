@@ -32,8 +32,13 @@ use std::{
         Arc,
     },
 };
-use storage::{hash, random_id, read_json, write_json, Redactor, RunLock};
+use storage::{hash, random_id, read_json, secure_dir, write_json, Redactor, RunLock};
 use tool_runtime::Runtime;
+use web_discovery::{
+    AcquisitionFailureCode, DiscoveryArtifact, DiscoveryBounds, DiscoveryFailure,
+    DiscoveryObservation, DiscoveryPlan, DiscoveryRequest, DiscoverySession, EvidenceState,
+    ReceiptLineage, DISCOVERY_SCHEMA_VERSION,
+};
 use world_model::{DecisionKind, WorldModel};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -113,9 +118,69 @@ pub struct Engine {
     _lock: RunLock,
 }
 
+fn bind_discovery_plan(config: &mut RunConfig) -> Result<()> {
+    let Some(source_path) = config.discovery_plan.clone() else {
+        config.discovery_plan_hash = None;
+        return Ok(());
+    };
+    ensure!(
+        config.discovery_plan_hash.is_none(),
+        "discovery_plan_hash is engine-managed"
+    );
+    let plan: DiscoveryPlan = read_json(&source_path)?;
+    let plan = plan.canonicalized()?;
+    let plan_hash = plan.fingerprint()?;
+    let policy = Policy::with_overrides(config.scope.clone(), config.overrides.clone())?;
+    let session = DiscoverySession::start(plan.clone())?;
+    for request in &session.checkpoint().frontier {
+        policy.check_action(&ToolAction::WebDiscoveryFetch {
+            plan_hash: plan_hash.clone(),
+            request_id: request.request_id.clone(),
+            url: request.url.clone(),
+            allowed_origins: plan.allowed_origins.clone(),
+            max_response_bytes: plan.bounds.max_document_bytes,
+        })?;
+    }
+    let bound_path = config.output_dir.join("configured-web-discovery-plan.json");
+    ensure!(
+        !bound_path.exists(),
+        "run directory already contains a bound discovery plan"
+    );
+    write_json(&bound_path, &plan)?;
+    config.discovery_plan = Some(bound_path);
+    config.discovery_plan_hash = Some(plan_hash);
+    config.validate()
+}
+
+fn configured_discovery_plan(config: &RunConfig) -> Result<Option<DiscoveryPlan>> {
+    let Some(path) = &config.discovery_plan else {
+        ensure!(
+            config.discovery_plan_hash.is_none(),
+            "discovery plan hash exists without a plan"
+        );
+        return Ok(None);
+    };
+    let expected = config
+        .discovery_plan_hash
+        .as_deref()
+        .context("configured discovery plan is not bound to a canonical hash")?;
+    let plan: DiscoveryPlan = read_json(path)?;
+    let plan = plan.canonicalized()?;
+    ensure!(
+        plan.fingerprint()? == expected,
+        "bound discovery plan fingerprint changed"
+    );
+    Ok(Some(plan))
+}
+
 impl Engine {
     pub fn new(mut config: RunConfig) -> Result<Self> {
         config.validate()?;
+        secure_dir(&config.output_dir)?;
+        config.output_dir = config
+            .output_dir
+            .canonicalize()
+            .context("run output directory could not be canonicalized")?;
         if config.mode == Mode::CloudLive {
             let plan: LiveCloudPlan = read_json(
                 config
@@ -159,6 +224,7 @@ impl Engine {
             !config.output_dir.join("run-manifest.json").exists(),
             "run directory already contains a run; use resume or a new directory"
         );
+        bind_discovery_plan(&mut config)?;
         let id = random_id("run")?;
         let redactor = Redactor::with_override(&config.overrides);
         let evidence =
@@ -192,7 +258,10 @@ impl Engine {
         Ok(engine)
     }
     pub fn resume(root: &Path) -> Result<Self> {
-        let lock = RunLock::acquire(root)?;
+        let root = root
+            .canonicalize()
+            .context("run output directory could not be canonicalized")?;
+        let lock = RunLock::acquire(&root)?;
         let snapshot: RunSnapshot = read_json(&root.join("run-manifest.json"))?;
         snapshot.config.validate()?;
         ensure!(
@@ -200,9 +269,26 @@ impl Engine {
             "unsupported run schema"
         );
         ensure!(
-            snapshot.config.output_dir.canonicalize()? == root.canonicalize()?,
+            snapshot.config.output_dir.canonicalize()? == root,
             "resume directory mismatch"
         );
+        if snapshot.config.discovery_plan.is_some() {
+            let expected_path = root.join("configured-web-discovery-plan.json");
+            ensure!(
+                snapshot
+                    .config
+                    .discovery_plan
+                    .as_deref()
+                    .and_then(|path| path.canonicalize().ok())
+                    .is_some_and(|path| {
+                        expected_path
+                            .canonicalize()
+                            .is_ok_and(|expected| path == expected)
+                    }),
+                "resume discovery plan must use the run-bound canonical copy"
+            );
+            configured_discovery_plan(&snapshot.config)?;
+        }
         ensure!(
             snapshot.status != RunStatus::Complete,
             "run already complete; use retest for a finding"
@@ -266,20 +352,59 @@ impl Engine {
         self.checkpoint()
     }
     pub fn retry_failed_stages(&mut self) -> Result<usize> {
-        let before = self.snapshot.completed_targets.len();
+        let stages = self
+            .snapshot
+            .completed_targets
+            .iter()
+            .filter(|entry| entry.starts_with("failed:stage:"))
+            .cloned()
+            .collect::<Vec<_>>();
         self.snapshot
             .completed_targets
             .retain(|entry| !entry.starts_with("failed:stage:"));
-        let cleared = before.saturating_sub(self.snapshot.completed_targets.len());
+        let cleared = stages.len();
         ensure!(cleared > 0, "run has no failed external stages to retry");
         self.snapshot.decisions.push(json!({
             "action":"retry_failed_external_stages",
             "cleared":cleared,
-            "warning":"The explicit retry may repeat browser, cloud, or provider operations that completed before the prior failure.",
+            "stages":stages,
+            "warning":"The explicit retry may repeat browser, web-validation, cloud, or provider operations that completed before the prior failure.",
             "timestamp_ms":now_ms()
         }));
         self.checkpoint()?;
         Ok(cleared)
+    }
+
+    fn stage_retry_pending(&self, failed_stage: &str) -> bool {
+        for decision in self.snapshot.decisions.iter().rev() {
+            match decision["action"].as_str() {
+                Some("retry_stage_consumed") if decision["stage"] == failed_stage => {
+                    return false;
+                }
+                Some("retry_failed_external_stages")
+                    if decision["stages"]
+                        .as_array()
+                        .is_some_and(|stages| stages.iter().any(|stage| stage == failed_stage)) =>
+                {
+                    return true;
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn consume_stage_retry(&mut self, failed_stage: &str) -> Result<()> {
+        ensure!(
+            self.stage_retry_pending(failed_stage),
+            "external stage retry has not been explicitly authorized"
+        );
+        self.snapshot.decisions.push(json!({
+            "action":"retry_stage_consumed",
+            "stage":failed_stage,
+            "timestamp_ms":now_ms()
+        }));
+        self.checkpoint()
     }
     pub fn apply_overrides(&mut self, mut overrides: ExpertOverrides) -> Result<()> {
         overrides.validate()?;
@@ -454,6 +579,13 @@ impl Engine {
         self.snapshot.status = RunStatus::Recon;
         self.checkpoint()?;
         let mode = self.snapshot.config.mode;
+        if matches!(mode, Mode::Blackbox | Mode::Greybox) {
+            if let Some(plan) = configured_discovery_plan(&self.snapshot.config)? {
+                if self.run_web_discovery(plan).await?.is_none() {
+                    return Ok(());
+                }
+            }
+        }
         if matches!(
             mode,
             Mode::Whitebox | Mode::Greybox | Mode::Skills | Mode::Cloud | Mode::Pr
@@ -495,9 +627,16 @@ impl Engine {
                 if self.should_stop()? {
                     return Ok(());
                 }
-                match mode {
-                    Mode::Host => self.assess_host(&target).await?,
+                let complete = match mode {
+                    Mode::Host => {
+                        self.assess_host(&target).await?;
+                        true
+                    }
                     _ => self.assess_http(&target).await?,
+                };
+                if !complete || self.should_stop()? {
+                    self.checkpoint()?;
+                    return Ok(());
                 }
                 self.snapshot.completed_targets.push(target);
                 self.checkpoint()?;
@@ -1137,10 +1276,16 @@ impl Engine {
                 continue;
             }
             match &receipt.output.action {
-                ToolAction::HttpGet { url } | ToolAction::HttpRequest { url, .. } => {
+                ToolAction::HttpGet { url }
+                | ToolAction::WebDiscoveryFetch { url, .. }
+                | ToolAction::HttpRequest { url, .. } => {
                     capabilities.insert("http".into());
                     facts.insert("http_seen".into());
                     derive_web_chain_facts(url, &receipt.output.data, &mut facts);
+                }
+                ToolAction::OpenRedirectProbe { .. } => {
+                    capabilities.insert("http".into());
+                    facts.insert("http_seen".into());
                 }
                 ToolAction::SourceRead { path, .. } => {
                     capabilities.insert("source-read".into());
@@ -1177,17 +1322,7 @@ impl Engine {
             }
         }
         for finding in &self.snapshot.findings {
-            if !matches!(
-                finding.state,
-                FindingState::Confirmed
-                    | FindingState::RetestedPresent
-                    | FindingState::OperatorAccepted
-            ) || !finding
-                .candidate
-                .receipt_ids
-                .iter()
-                .all(|receipt_id| initial_receipt_ids.contains(receipt_id))
-            {
+            if !finding_is_chain_eligible(finding, &initial_receipt_ids) {
                 continue;
             }
             derive_candidate_chain_facts(&finding.candidate, &mut facts);
@@ -1295,16 +1430,417 @@ impl Engine {
         Ok(())
     }
 
-    async fn assess_http(&mut self, target: &str) -> Result<()> {
-        if self.decision(target) == DecisionKind::Stop {
-            return Ok(());
+    async fn run_web_discovery(
+        &mut self,
+        plan: DiscoveryPlan,
+    ) -> Result<Option<DiscoveryArtifact>> {
+        let plan = plan.canonicalized()?;
+        let defaults = DiscoveryBounds::default();
+        let exceeds_default = plan.bounds.max_depth > defaults.max_depth
+            || plan.bounds.max_resources > defaults.max_resources
+            || plan.bounds.max_document_bytes > defaults.max_document_bytes
+            || plan.bounds.max_references_per_document > defaults.max_references_per_document
+            || plan.bounds.max_forms_per_document > defaults.max_forms_per_document
+            || plan.bounds.max_controls_per_form > defaults.max_controls_per_form
+            || plan.bounds.max_openapi_operations > defaults.max_openapi_operations
+            || plan.bounds.max_omissions > defaults.max_omissions;
+        ensure!(
+            !exceeds_default || self.runtime.policy.bypasses(Control::DataSampling),
+            "web discovery bounds above the defaults require an audited data_sampling override"
+        );
+
+        let plan_hash = plan.fingerprint()?;
+        let initial_session = DiscoverySession::start(plan.clone())?;
+        for request in &initial_session.checkpoint().frontier {
+            self.runtime
+                .policy
+                .check_action(&ToolAction::WebDiscoveryFetch {
+                    plan_hash: plan_hash.clone(),
+                    request_id: request.request_id.clone(),
+                    url: request.url.clone(),
+                    allowed_origins: plan.allowed_origins.clone(),
+                    max_response_bytes: plan.bounds.max_document_bytes,
+                })?;
         }
-        let r = self
-            .tool(
+        let stage = stage_key("web-discovery", &plan)?;
+        let root = self.snapshot.config.output_dir.join("web-discovery");
+        let directory = root.join(&plan_hash[..24]);
+        secure_dir(&root)?;
+        secure_dir(&directory)?;
+        let plan_path = directory.join("plan.json");
+        let checkpoint_path = directory.join("checkpoint.json");
+        let artifact_path = directory.join("artifact.json");
+        let stage_path = directory.join("stage.json");
+        let intents_dir = directory.join("intents");
+        secure_dir(&intents_dir)?;
+        if plan_path.exists() {
+            let persisted: DiscoveryPlan = read_json(&plan_path)?;
+            ensure!(
+                persisted == plan,
+                "persisted discovery plan does not match the requested plan"
+            );
+        } else {
+            write_json(&plan_path, &plan)?;
+        }
+
+        if self.snapshot.completed_targets.contains(&stage) {
+            let artifact: DiscoveryArtifact = read_json(&artifact_path)
+                .context("completed discovery stage is missing its artifact")?;
+            self.verify_discovery_artifact(&plan, &artifact)?;
+            let stage_record: DiscoveryStageRecord = read_json(&stage_path)
+                .context("completed discovery stage is missing its record")?;
+            ensure!(
+                stage_record.schema_version == DISCOVERY_SCHEMA_VERSION
+                    && stage_record.stage_key == stage
+                    && stage_record.plan_hash == plan_hash
+                    && stage_record.artifact_hash == artifact.canonical_hash()?
+                    && stage_record.complete,
+                "discovery stage record does not match its verified artifact"
+            );
+            return Ok(Some(artifact));
+        }
+
+        let mut session = if checkpoint_path.exists() {
+            let checkpoint: web_discovery::DiscoveryCheckpoint = read_json(&checkpoint_path)?;
+            let session = DiscoverySession::resume(plan.clone(), checkpoint)?;
+            self.verify_discovery_artifact(&plan, &session.artifact()?)?;
+            session
+        } else {
+            initial_session
+        };
+        while let Some(request) = session.next_request().cloned() {
+            if self.should_stop()? {
+                write_json(&checkpoint_path, session.checkpoint())?;
+                return Ok(None);
+            }
+            let action = ToolAction::WebDiscoveryFetch {
+                plan_hash: plan_hash.clone(),
+                request_id: request.request_id.clone(),
+                url: request.url.clone(),
+                allowed_origins: plan.allowed_origins.clone(),
+                max_response_bytes: plan.bounds.max_document_bytes,
+            };
+            let intent_path = intents_dir.join(format!(
+                "intent-{}.json",
+                hash(request.request_id.as_bytes())
+            ));
+            let receipt = if intent_path.exists() {
+                let mut intent: DiscoveryOperationIntent = read_json(&intent_path)?;
+                intent.validate(&plan_hash, &request, &action)?;
+                let receipt = match intent.state {
+                    DiscoveryIntentState::Receipted | DiscoveryIntentState::Indeterminate => {
+                        let receipt = self.runtime.evidence.get(
+                            intent
+                                .receipt_id
+                                .as_deref()
+                                .context("resolved discovery intent lacks a receipt")?,
+                        )?;
+                        ensure!(
+                            receipt.actor == "web-discovery"
+                                && receipt.output.action == intent.action,
+                            "resolved discovery intent does not bind its exact receipt"
+                        );
+                        receipt
+                    }
+                    DiscoveryIntentState::Pending => {
+                        let mut recoverable = self
+                            .runtime
+                            .evidence
+                            .manifest()?
+                            .into_iter()
+                            .filter(|receipt| {
+                                receipt.actor == "web-discovery"
+                                    && discovery_action_matches(
+                                        &receipt.output.action,
+                                        &plan,
+                                        &request,
+                                    )
+                            })
+                            .collect::<Vec<_>>();
+                        recoverable.sort_by(|left, right| {
+                            (left.captured_ms, left.id.as_str())
+                                .cmp(&(right.captured_ms, right.id.as_str()))
+                        });
+                        if let Some(receipt) = recoverable.into_iter().next() {
+                            intent.state = DiscoveryIntentState::Receipted;
+                            intent.receipt_id = Some(receipt.id.clone());
+                            receipt
+                        } else {
+                            let receipt = self.capture_external(
+                                "web-discovery",
+                                action.clone(),
+                                json!({
+                                    "error":"indeterminate_after_crash: a durable operation intent exists without a sealed receipt; the request was not repeated",
+                                    "indeterminate_after_crash":true,
+                                    "authorization_provenance":{
+                                        "authorized":self.snapshot.config.authorized,
+                                        "explicit_override":self.runtime.policy.bypasses(Control::Authorization)
+                                    }
+                                }),
+                                false,
+                                false,
+                            )?;
+                            intent.state = DiscoveryIntentState::Indeterminate;
+                            intent.receipt_id = Some(receipt.id.clone());
+                            receipt
+                        }
+                    }
+                };
+                write_json(&intent_path, &intent)?;
+                receipt
+            } else {
+                let mut recoverable = self
+                    .runtime
+                    .evidence
+                    .manifest()?
+                    .into_iter()
+                    .filter(|receipt| {
+                        receipt.actor == "web-discovery" && receipt.output.action == action
+                    })
+                    .collect::<Vec<_>>();
+                recoverable.sort_by(|left, right| {
+                    (left.captured_ms, left.id.as_str())
+                        .cmp(&(right.captured_ms, right.id.as_str()))
+                });
+                if let Some(receipt) = recoverable.into_iter().next_back() {
+                    let mut intent = DiscoveryOperationIntent::pending(
+                        plan_hash.clone(),
+                        request.request_id.clone(),
+                        action,
+                    );
+                    intent.state = DiscoveryIntentState::Receipted;
+                    intent.receipt_id = Some(receipt.id.clone());
+                    write_json(&intent_path, &intent)?;
+                    receipt
+                } else {
+                    let mut intent = DiscoveryOperationIntent::pending(
+                        plan_hash.clone(),
+                        request.request_id.clone(),
+                        action.clone(),
+                    );
+                    write_json(&intent_path, &intent)?;
+                    let receipt = self.tool("web-discovery", action).await?;
+                    intent.state = DiscoveryIntentState::Receipted;
+                    intent.receipt_id = Some(receipt.id.clone());
+                    write_json(&intent_path, &intent)?;
+                    receipt
+                }
+            };
+            if !self.snapshot.receipt_ids.contains(&receipt.id) {
+                self.snapshot.receipt_ids.push(receipt.id.clone());
+                self.checkpoint()?;
+            }
+            match discovery_transition_from_receipt(&plan, &request, &receipt)? {
+                DiscoveryTransition::Observation(observation) => {
+                    session.apply_observation(observation)?;
+                }
+                DiscoveryTransition::Failure(failure) => session.apply_failure(failure)?,
+            }
+            write_json(&checkpoint_path, session.checkpoint())?;
+            if self.should_stop()? {
+                return Ok(None);
+            }
+        }
+
+        let artifact = session.artifact()?;
+        ensure!(artifact.complete, "discovery frontier is not complete");
+        artifact.validate()?;
+        self.verify_discovery_artifact(&plan, &artifact)?;
+        let artifact_hash = artifact.canonical_hash()?;
+        write_json(&artifact_path, &artifact)?;
+        write_json(
+            &stage_path,
+            &DiscoveryStageRecord {
+                schema_version: DISCOVERY_SCHEMA_VERSION,
+                stage_key: stage.clone(),
+                plan_hash,
+                artifact_hash: artifact_hash.clone(),
+                complete: true,
+            },
+        )?;
+        self.snapshot.decisions.push(json!({
+            "action":"web_discovery",
+            "plan_id":plan.plan_id,
+            "artifact":artifact_path.strip_prefix(&self.snapshot.config.output_dir)?.to_string_lossy(),
+            "artifact_hash":artifact_hash,
+            "resources":artifact.resources.len(),
+            "forms":artifact.forms.len(),
+            "operations":artifact.operations.len(),
+            "omissions":artifact.omissions.len(),
+            "complete":true,
+            "finding_count_created":0
+        }));
+        self.snapshot.completed_targets.push(stage);
+        self.checkpoint()?;
+        Ok(Some(artifact))
+    }
+
+    fn verify_discovery_artifact(
+        &self,
+        plan: &DiscoveryPlan,
+        artifact: &DiscoveryArtifact,
+    ) -> Result<()> {
+        enum Replay<'a> {
+            Observation(&'a web_discovery::ReverificationInput),
+            Failure(&'a web_discovery::FailureReverificationInput),
+        }
+
+        artifact.validate()?;
+        ensure!(
+            artifact.plan_hash == plan.fingerprint()?,
+            "discovery artifact plan lineage mismatch"
+        );
+        let mut transitions = BTreeMap::new();
+        for input in &artifact.reverification_inputs {
+            ensure!(
+                transitions
+                    .insert(input.sequence, Replay::Observation(input))
+                    .is_none(),
+                "duplicate discovery replay sequence"
+            );
+        }
+        for input in &artifact.failure_reverification_inputs {
+            ensure!(
+                transitions
+                    .insert(input.sequence, Replay::Failure(input))
+                    .is_none(),
+                "duplicate discovery replay sequence"
+            );
+        }
+
+        let mut rebuilt = DiscoverySession::start(plan.clone())?;
+        for (expected_sequence, (sequence, input)) in transitions.into_iter().enumerate() {
+            ensure!(
+                sequence == u64::try_from(expected_sequence)?,
+                "discovery replay sequence is not contiguous"
+            );
+            let request = rebuilt
+                .next_request()
+                .context("artifact contains more transitions than the discovery frontier")?
+                .clone();
+            match input {
+                Replay::Observation(expected) => {
+                    let receipt = self.runtime.evidence.get(&expected.receipt.receipt_id)?;
+                    ensure!(
+                        receipt.content_hash == expected.receipt.receipt_content_hash,
+                        "discovery observation receipt hash mismatch"
+                    );
+                    let DiscoveryTransition::Observation(observation) =
+                        discovery_transition_from_receipt(plan, &request, &receipt)?
+                    else {
+                        anyhow::bail!(
+                            "successful discovery replay input references a failed receipt"
+                        )
+                    };
+                    ensure!(
+                        observation.request_id == expected.request_id
+                            && observation.requested_url == expected.requested_url
+                            && observation.effective_url == expected.effective_url
+                            && observation.status_code == expected.status_code
+                            && observation.media_type == expected.media_type
+                            && u32::try_from(observation.body.len())?
+                                == expected.captured_body_bytes
+                            && observation.body_hash == expected.body_hash
+                            && observation.truncated == expected.truncated
+                            && observation.receipt == expected.receipt,
+                        "discovery observation does not rebuild from its sealed receipt"
+                    );
+                    rebuilt.apply_observation(observation)?;
+                }
+                Replay::Failure(expected) => {
+                    let receipt = self.runtime.evidence.get(&expected.receipt.receipt_id)?;
+                    ensure!(
+                        receipt.content_hash == expected.receipt.receipt_content_hash,
+                        "discovery failure receipt hash mismatch"
+                    );
+                    let DiscoveryTransition::Failure(failure) =
+                        discovery_transition_from_receipt(plan, &request, &receipt)?
+                    else {
+                        anyhow::bail!(
+                            "failed discovery replay input references a successful receipt"
+                        )
+                    };
+                    ensure!(
+                        failure.request_id == expected.request_id
+                            && request.url == expected.requested_url
+                            && failure.code == expected.code
+                            && failure.detail == expected.detail
+                            && failure.receipt == expected.receipt,
+                        "discovery failure does not rebuild from its sealed receipt"
+                    );
+                    rebuilt.apply_failure(failure)?;
+                }
+            }
+        }
+        ensure!(
+            rebuilt.is_complete() == artifact.complete,
+            "rebuilt discovery completion state differs from the artifact"
+        );
+        let rebuilt_artifact = rebuilt.artifact()?;
+        ensure!(
+            rebuilt_artifact == *artifact
+                && rebuilt_artifact.canonical_hash()? == artifact.canonical_hash()?,
+            "discovery artifact differs from independent receipt replay"
+        );
+        Ok(())
+    }
+
+    fn discovery_receipt_for_url(
+        &self,
+        artifact: &DiscoveryArtifact,
+        raw_url: &str,
+    ) -> Result<Option<Receipt>> {
+        let mut url = url::Url::parse(raw_url)?;
+        url.set_fragment(None);
+        let canonical = url.to_string();
+        let receipt_id = artifact
+            .reverification_inputs
+            .iter()
+            .find(|input| input.requested_url == canonical)
+            .map(|input| input.receipt.receipt_id.as_str())
+            .or_else(|| {
+                artifact
+                    .failure_reverification_inputs
+                    .iter()
+                    .find(|input| input.requested_url == canonical)
+                    .map(|input| input.receipt.receipt_id.as_str())
+            });
+        receipt_id
+            .map(|receipt_id| self.runtime.evidence.get(receipt_id))
+            .transpose()
+    }
+
+    async fn assess_http(&mut self, target: &str) -> Result<bool> {
+        if self.decision(target) == DecisionKind::Stop {
+            return Ok(true);
+        }
+        let discovery = if matches!(self.snapshot.config.mode, Mode::Blackbox | Mode::Greybox) {
+            let plan = if let Some(plan) = configured_discovery_plan(&self.snapshot.config)? {
+                plan
+            } else {
+                default_discovery_plan(target)?
+            };
+            let Some(artifact) = self.run_web_discovery(plan.clone()).await? else {
+                return Ok(false);
+            };
+            Some((plan, artifact))
+        } else {
+            None
+        };
+        let r = if let Some(receipt) = discovery
+            .as_ref()
+            .map(|(_, artifact)| self.discovery_receipt_for_url(artifact, target))
+            .transpose()?
+            .flatten()
+        {
+            receipt
+        } else {
+            self.tool(
                 "deterministic-probe",
                 ToolAction::HttpGet { url: target.into() },
             )
-            .await?;
+            .await?
+        };
         self.world
             .observe_asset(target, r.output.successful, &r.id)?;
         if !r.output.successful {
@@ -1312,7 +1848,7 @@ impl Engine {
                 "Probe failed for {target}: {}",
                 r.output.data["error"]
             ));
-            return Ok(());
+            return Ok(true);
         }
         let status = r.output.data["status"].as_u64().unwrap_or_default();
         let html = r.output.data["headers"]["content-type"]
@@ -1331,45 +1867,84 @@ impl Engine {
                 }
             }
         }
-        // Bounded, same-scope static link and JS asset discovery. No JS execution claim.
-        let body = r.output.data["body"].as_str().unwrap_or_default();
-        let re = regex::Regex::new(r#"(?:href|src|action)\s*=\s*["']([^"'#]+)["']"#)?;
-        let base = url::Url::parse(target)?;
         let mut discovered = BTreeSet::new();
-        for cap in re.captures_iter(body) {
-            if let Ok(url) = base.join(&cap[1]) {
-                if self.runtime.policy.check_url(url.as_str()).is_ok() {
-                    discovered.insert(url.to_string());
+        discovered.insert(target.to_owned());
+        if let Some((plan, artifact)) = &discovery {
+            discovered.extend(artifact.resources.iter().filter_map(|resource| {
+                if resource.state == EvidenceState::Omitted {
+                    return None;
+                }
+                let origin = url::Url::parse(&resource.url)
+                    .ok()?
+                    .origin()
+                    .ascii_serialization();
+                plan.allowed_origins
+                    .binary_search(&origin)
+                    .is_ok()
+                    .then(|| resource.url.clone())
+            }));
+        }
+        if matches!(self.snapshot.config.mode, Mode::Blackbox | Mode::Greybox) {
+            let mut probes = BTreeSet::new();
+            for candidate_url in &discovered {
+                let Ok(parsed) = url::Url::parse(candidate_url) else {
+                    continue;
+                };
+                let parameters = parsed
+                    .query_pairs()
+                    .map(|(key, _)| key.into_owned())
+                    .collect::<BTreeSet<_>>();
+                for parameter in parameters {
+                    let mut endpoint = parsed.clone();
+                    let preserved = endpoint
+                        .query_pairs()
+                        .filter(|(key, _)| key != &parameter)
+                        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+                        .collect::<Vec<_>>();
+                    endpoint.set_query(None);
+                    if !preserved.is_empty() {
+                        endpoint.query_pairs_mut().extend_pairs(&preserved);
+                    }
+                    probes.insert((endpoint.to_string(), parameter));
                 }
             }
-        }
-        let crawl_limit = if self
-            .snapshot
-            .config
-            .overrides
-            .disables(Control::DataSampling)
-        {
-            usize::MAX
-        } else {
-            3
-        };
-        for linked in discovered.into_iter().take(crawl_limit) {
-            if self.should_stop()? {
-                break;
+            let probe_limit = if self
+                .snapshot
+                .config
+                .overrides
+                .disables(Control::DataSampling)
+            {
+                20
+            } else {
+                3
+            };
+            for (endpoint, parameter) in probes.into_iter().take(probe_limit) {
+                if self.should_stop()? {
+                    return Ok(false);
+                }
+                let probe_stage = stage_key(
+                    "open-redirect-probe",
+                    &(endpoint.as_str(), parameter.as_str()),
+                )?;
+                if self.snapshot.completed_targets.contains(&probe_stage) {
+                    continue;
+                }
+                if let Some(receipt) = self
+                    .run_open_redirect_probe(&endpoint, &parameter, &probe_stage)
+                    .await?
+                {
+                    self.add_candidate(
+                        open_redirect_candidate(&endpoint, &parameter, &receipt.id),
+                        "open-redirect-validator",
+                        None,
+                    )
+                    .await?;
+                    if !self.snapshot.completed_targets.contains(&probe_stage) {
+                        self.snapshot.completed_targets.push(probe_stage);
+                        self.checkpoint()?;
+                    }
+                }
             }
-            if self.decision(&linked) == DecisionKind::Stop {
-                break;
-            }
-            let receipt = self
-                .tool(
-                    "bounded-crawl",
-                    ToolAction::HttpGet {
-                        url: linked.clone(),
-                    },
-                )
-                .await?;
-            self.world
-                .observe_asset(&linked, receipt.output.successful, &receipt.id)?;
         }
         if self.snapshot.config.mode == Mode::Ai {
             let baseline=self.tool("ai-baseline",ToolAction::AiPrompt{url:target.into(),prompt:"For an authorized benign behavior check, reply exactly: METISBLACK_BASELINE".into()}).await?;
@@ -1388,8 +1963,252 @@ impl Engine {
             write_json(&path, &conversations)?;
             self.snapshot.limitations.push("AI probes use a messages-array POST envelope and benign markers. Application intent, conversation schema compatibility and behavioral verdicts require review; a repeated marker alone is not a confirmed vulnerability.".into());
         }
-        Ok(())
+        Ok(true)
     }
+
+    async fn run_open_redirect_probe(
+        &mut self,
+        endpoint: &str,
+        parameter: &str,
+        probe_stage: &str,
+    ) -> Result<Option<Receipt>> {
+        let failed_stage = format!("failed:{probe_stage}");
+        ensure!(
+            !self.snapshot.completed_targets.contains(&failed_stage),
+            "open-redirect probe stage previously failed; resume requires --retry-failed-stages"
+        );
+
+        let intents_dir = self
+            .snapshot
+            .config
+            .output_dir
+            .join("open-redirect-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!("intent-{}.json", hash(probe_stage.as_bytes())));
+        let retry_pending = self.stage_retry_pending(&failed_stage);
+
+        let receipt = if retry_pending {
+            self.consume_stage_retry(&failed_stage)?;
+            let action = ToolAction::OpenRedirectProbe {
+                endpoint: endpoint.to_owned(),
+                parameter: parameter.to_owned(),
+                canary: random_id("redirect")?,
+            };
+            let mut intent = OpenRedirectOperationIntent::pending(
+                probe_stage.to_owned(),
+                endpoint.to_owned(),
+                parameter.to_owned(),
+                action.clone(),
+            );
+            write_json(&intent_path, &intent)?;
+            let receipt = match self.tool("open-redirect-validator", action).await {
+                Ok(receipt) => receipt,
+                Err(error) => {
+                    self.record_open_redirect_failure(
+                        &failed_stage,
+                        None,
+                        "runtime execution failed before a sealed receipt was returned",
+                    )?;
+                    return Err(error).context("open-redirect probe execution failed");
+                }
+            };
+            intent.state = DiscoveryIntentState::Receipted;
+            intent.receipt_id = Some(receipt.id.clone());
+            write_json(&intent_path, &intent)?;
+            receipt
+        } else if intent_path.exists() {
+            let mut intent: OpenRedirectOperationIntent = read_json(&intent_path)?;
+            intent.validate(probe_stage, endpoint, parameter)?;
+            let receipt = match intent.state {
+                DiscoveryIntentState::Receipted | DiscoveryIntentState::Indeterminate => {
+                    let receipt = self.runtime.evidence.get(
+                        intent
+                            .receipt_id
+                            .as_deref()
+                            .context("resolved open-redirect intent lacks a receipt")?,
+                    )?;
+                    ensure!(
+                        receipt.actor == "open-redirect-validator"
+                            && receipt.output.action == intent.action,
+                        "resolved open-redirect intent does not bind its exact receipt"
+                    );
+                    receipt
+                }
+                DiscoveryIntentState::Pending => {
+                    let mut recoverable = self
+                        .runtime
+                        .evidence
+                        .manifest()?
+                        .into_iter()
+                        .filter(|receipt| {
+                            receipt.actor == "open-redirect-validator"
+                                && receipt.output.action == intent.action
+                        })
+                        .collect::<Vec<_>>();
+                    recoverable.sort_by(|left, right| {
+                        (left.captured_ms, left.id.as_str())
+                            .cmp(&(right.captured_ms, right.id.as_str()))
+                    });
+                    if let Some(receipt) = recoverable.into_iter().next() {
+                        intent.state = DiscoveryIntentState::Receipted;
+                        intent.receipt_id = Some(receipt.id.clone());
+                        receipt
+                    } else {
+                        let receipt = self.capture_external(
+                            "open-redirect-validator",
+                            intent.action.clone(),
+                            json!({
+                                "error":"indeterminate_after_crash: a durable operation intent exists without a sealed receipt; the request was not repeated",
+                                "indeterminate_after_crash":true,
+                                "authorization_provenance":{
+                                    "authorized":self.snapshot.config.authorized,
+                                    "explicit_override":self.runtime.policy.bypasses(Control::Authorization)
+                                }
+                            }),
+                            false,
+                            false,
+                        )?;
+                        intent.state = DiscoveryIntentState::Indeterminate;
+                        intent.receipt_id = Some(receipt.id.clone());
+                        receipt
+                    }
+                }
+            };
+            write_json(&intent_path, &intent)?;
+            receipt
+        } else {
+            // The intent may have been lost after receipt publication. Recover
+            // a sealed probe for the same stage before authorizing any repeat.
+            let mut recoverable = self
+                .runtime
+                .evidence
+                .manifest()?
+                .into_iter()
+                .filter(|receipt| {
+                    receipt.actor == "open-redirect-validator"
+                        && matches!(
+                            &receipt.output.action,
+                            ToolAction::OpenRedirectProbe {
+                                endpoint: receipt_endpoint,
+                                parameter: receipt_parameter,
+                                ..
+                            } if receipt_endpoint == endpoint && receipt_parameter == parameter
+                        )
+                })
+                .collect::<Vec<_>>();
+            recoverable.sort_by(|left, right| {
+                (left.captured_ms, left.id.as_str()).cmp(&(right.captured_ms, right.id.as_str()))
+            });
+            if let Some(receipt) = recoverable.into_iter().next_back() {
+                let mut intent = OpenRedirectOperationIntent::pending(
+                    probe_stage.to_owned(),
+                    endpoint.to_owned(),
+                    parameter.to_owned(),
+                    receipt.output.action.clone(),
+                );
+                intent.state = DiscoveryIntentState::Receipted;
+                intent.receipt_id = Some(receipt.id.clone());
+                intent.validate(probe_stage, endpoint, parameter)?;
+                write_json(&intent_path, &intent)?;
+                receipt
+            } else {
+                let action = ToolAction::OpenRedirectProbe {
+                    endpoint: endpoint.to_owned(),
+                    parameter: parameter.to_owned(),
+                    canary: random_id("redirect")?,
+                };
+                let mut intent = OpenRedirectOperationIntent::pending(
+                    probe_stage.to_owned(),
+                    endpoint.to_owned(),
+                    parameter.to_owned(),
+                    action.clone(),
+                );
+                write_json(&intent_path, &intent)?;
+                let receipt = match self.tool("open-redirect-validator", action).await {
+                    Ok(receipt) => receipt,
+                    Err(error) => {
+                        self.record_open_redirect_failure(
+                            &failed_stage,
+                            None,
+                            "runtime execution failed before a sealed receipt was returned",
+                        )?;
+                        return Err(error).context("open-redirect probe execution failed");
+                    }
+                };
+                intent.state = DiscoveryIntentState::Receipted;
+                intent.receipt_id = Some(receipt.id.clone());
+                write_json(&intent_path, &intent)?;
+                receipt
+            }
+        };
+
+        if !self.snapshot.receipt_ids.contains(&receipt.id) {
+            self.snapshot.receipt_ids.push(receipt.id.clone());
+            self.checkpoint()?;
+        }
+        let proof = Proof::OpenRedirect {
+            endpoint: endpoint.to_owned(),
+            parameter: parameter.to_owned(),
+        };
+        let observation = open_redirect_observation_for_proof(&proof, &receipt);
+        if observation
+            .as_ref()
+            .is_some_and(open_redirect_retest_is_conclusive)
+        {
+            if proof_matches(&proof, &receipt) {
+                // A positive probe is not complete until the caller persists
+                // its receipt-backed finding. Resume must revisit this window.
+                return Ok(Some(receipt));
+            }
+            self.snapshot.completed_targets.push(probe_stage.to_owned());
+            self.checkpoint()?;
+            return Ok(None);
+        }
+
+        let reason = if receipt.output.successful {
+            "the response was malformed or its HTTP status could not establish the redirect predicate's presence or absence"
+        } else if receipt.output.data["indeterminate_after_crash"] == true {
+            "a pending pre-send intent had no sealed receipt after restart, so the request was not repeated"
+        } else {
+            "the transport or policy operation produced an unsuccessful receipt"
+        };
+        self.record_open_redirect_failure(&failed_stage, Some(&receipt.id), reason)?;
+        anyhow::bail!(
+            "open-redirect probe was indeterminate; inspect receipt {} and explicitly retry the failed stage if appropriate",
+            receipt.id
+        )
+    }
+
+    fn record_open_redirect_failure(
+        &mut self,
+        failed_stage: &str,
+        receipt_id: Option<&str>,
+        reason: &str,
+    ) -> Result<()> {
+        if !self
+            .snapshot
+            .completed_targets
+            .iter()
+            .any(|stage| stage == failed_stage)
+        {
+            self.snapshot
+                .completed_targets
+                .push(failed_stage.to_owned());
+        }
+        self.snapshot.limitations.push(format!(
+            "Open-redirect validation is incomplete for stage {failed_stage}: {reason}. No negative coverage claim was made."
+        ));
+        self.snapshot.decisions.push(json!({
+            "action":"open_redirect_probe_indeterminate",
+            "stage":failed_stage,
+            "receipt_id":receipt_id,
+            "reason":reason,
+            "retry_requires_explicit_operator_decision":true,
+            "timestamp_ms":now_ms()
+        }));
+        self.checkpoint()
+    }
+
     async fn assess_host(&mut self, target: &str) -> Result<()> {
         let rules = self.runtime.policy.scope().network.clone();
         let host = policy::normalize_host(target)?;
@@ -1797,14 +2616,16 @@ impl Engine {
                 finding.review_reason = "No runtime receipts support the candidate.".into();
             }
             Ok(receipts) => {
-                let initial_supported = receipts
+                let supporting_receipts = receipts
                     .iter()
-                    .any(|r| proof_matches(&finding.candidate.proof, r));
-                if initial_supported {
-                    self.world.observe_hypothesis(&id, true, &receipts[0].id)?;
+                    .filter(|receipt| proof_matches(&finding.candidate.proof, receipt))
+                    .collect::<Vec<_>>();
+                if let Some(initial_receipt) = supporting_receipts.first() {
+                    self.world
+                        .observe_hypothesis(&id, true, &initial_receipt.id)?;
                     if self.decision(&id) == DecisionKind::Reproduce {
                         self.snapshot.status = RunStatus::Validating;
-                        if let Some(action) = proof_action(&finding.candidate.proof) {
+                        if let Some(action) = proof_action(&finding.candidate.proof)? {
                             let replay = self.tool("independent-reproducer", action).await?;
                             let reproduced = proof_matches(&finding.candidate.proof, &replay);
                             finding.validations.push(Validation{actor:"independent-reproducer".into(),receipt_ids:vec![replay.id.clone()],reproduced,reason:if reproduced{"The canonical proof predicate held during a separate execution."}else{"Independent replay did not establish the canonical proof predicate."}.into(),timestamp_ms:now_ms()});
@@ -1812,11 +2633,9 @@ impl Engine {
                             if reproduced {
                                 finding.claim_receipts.insert(
                                     finding.candidate.title.clone(),
-                                    finding
-                                        .candidate
-                                        .receipt_ids
+                                    supporting_receipts
                                         .iter()
-                                        .cloned()
+                                        .map(|receipt| receipt.id.clone())
                                         .chain([replay.id])
                                         .collect(),
                                 );
@@ -2303,6 +3122,34 @@ fn validate_cloud_snapshot(inventory: &Inventory, accounts: &[String]) -> Result
 fn header_candidate(url: &str, header: &str, receipt: &str) -> Candidate {
     Candidate{title:format!("Missing {header} response header"),description:format!("The captured HTML response does not set {header}. This is a hardening observation; it does not establish an injection exploit."),severity:Severity::Low,severity_justification:"Missing defense-in-depth response policy on a successful HTML response; no exploitability assumed.".into(),cvss:None,cwe:vec!["CWE-693".into()],owasp:vec![],mitre:vec![],location:url.into(),payload:String::new(),impact:"A browser defense-in-depth control is absent from this response.".into(),remediation:format!("Define and test an appropriate {header} policy for this application."),confidence:0.9,auth_context:"unauthenticated".into(),test_identity:None,receipt_ids:vec![receipt.into()],screenshots:vec![],chains_from:vec![],proof:Proof::MissingHeader{url:url.into(),header:header.into()}}
 }
+fn open_redirect_candidate(endpoint: &str, parameter: &str, receipt: &str) -> Candidate {
+    Candidate {
+        title: "Server redirects to an arbitrary external URL".into(),
+        description: format!(
+            "The `{parameter}` query parameter produced an exact redirect to a runtime-generated reserved-domain canary. The canary destination was observed in the response and was never contacted."
+        ),
+        severity: Severity::Low,
+        severity_justification: "The server accepted an arbitrary external redirect target, but phishing success, OAuth token exposure and account compromise were not demonstrated.".into(),
+        cvss: None,
+        cwe: vec!["CWE-601".into()],
+        owasp: vec![],
+        mitre: vec![],
+        location: endpoint.into(),
+        payload: String::new(),
+        impact: "A crafted application link can direct a user to an unrelated origin under an attacker's control.".into(),
+        remediation: "Allowlist redirect destinations by canonical origin and path, or use server-side destination identifiers instead of caller-supplied URLs.".into(),
+        confidence: 0.98,
+        auth_context: "unauthenticated".into(),
+        test_identity: None,
+        receipt_ids: vec![receipt.into()],
+        screenshots: vec![],
+        chains_from: vec![],
+        proof: Proof::OpenRedirect {
+            endpoint: endpoint.into(),
+            parameter: parameter.into(),
+        },
+    }
+}
 fn canonicalize_supported_claim(candidate: &mut Candidate) {
     let proof = candidate.proof.clone();
     match proof {
@@ -2366,6 +3213,20 @@ fn canonicalize_supported_claim(candidate: &mut Candidate) {
                     .into();
             candidate.location = url;
         }
+        Proof::OpenRedirect {
+            endpoint,
+            parameter,
+        } => {
+            let canonical = open_redirect_candidate(&endpoint, &parameter, "");
+            candidate.title = canonical.title;
+            candidate.description = canonical.description;
+            candidate.severity = canonical.severity;
+            candidate.severity_justification = canonical.severity_justification;
+            candidate.impact = canonical.impact;
+            candidate.remediation = canonical.remediation;
+            candidate.location = canonical.location;
+            candidate.cwe = canonical.cwe;
+        }
         Proof::Manual { .. } => return,
     }
     candidate.cvss = None;
@@ -2374,8 +3235,8 @@ fn canonicalize_supported_claim(candidate: &mut Candidate) {
     candidate.payload.clear();
     candidate.confidence = 0.9;
 }
-fn proof_action(proof: &Proof) -> Option<ToolAction> {
-    match proof {
+fn proof_action(proof: &Proof) -> Result<Option<ToolAction>> {
+    Ok(match proof {
         Proof::MissingHeader { url, .. } | Proof::InsecureCookie { url, .. } => {
             Some(ToolAction::HttpGet { url: url.clone() })
         }
@@ -2388,9 +3249,101 @@ fn proof_action(proof: &Proof) -> Option<ToolAction> {
             host: host.clone(),
             port: *port,
         }),
+        Proof::OpenRedirect {
+            endpoint,
+            parameter,
+        } => Some(ToolAction::OpenRedirectProbe {
+            endpoint: endpoint.clone(),
+            parameter: parameter.clone(),
+            canary: random_id("redirect")?,
+        }),
         Proof::Manual { .. } => None,
-    }
+    })
 }
+
+fn open_redirect_observation_for_proof(
+    proof: &Proof,
+    receipt: &Receipt,
+) -> Option<OpenRedirectObservation> {
+    if !receipt.output.successful {
+        return None;
+    }
+    let Proof::OpenRedirect {
+        endpoint,
+        parameter,
+    } = proof
+    else {
+        return None;
+    };
+    let ToolAction::OpenRedirectProbe {
+        endpoint: action_endpoint,
+        parameter: action_parameter,
+        canary,
+    } = &receipt.output.action
+    else {
+        return None;
+    };
+    if action_endpoint != endpoint || action_parameter != parameter {
+        return None;
+    }
+    let observation: OpenRedirectObservation =
+        serde_json::from_value(receipt.output.data.clone()).ok()?;
+    observation.validate().ok()?;
+    if observation.endpoint != endpoint.as_str()
+        || observation.parameter != parameter.as_str()
+        || observation.canary != canary.as_str()
+        || !(observation.authorization_provenance.authorized
+            || observation.authorization_provenance.explicit_override)
+    {
+        return None;
+    }
+    let mut expected_probe = url::Url::parse(endpoint).ok()?;
+    let preserved = expected_probe
+        .query_pairs()
+        .filter(|(key, _)| key != parameter)
+        .map(|(key, value)| (key.into_owned(), value.into_owned()))
+        .collect::<Vec<_>>();
+    expected_probe.set_query(None);
+    {
+        let mut query = expected_probe.query_pairs_mut();
+        query.extend_pairs(preserved.iter().map(|(key, value)| (key, value)));
+        query.append_pair(parameter, &observation.canary_url);
+    }
+    if observation.probe_url != expected_probe.as_str() {
+        return None;
+    }
+    Some(observation)
+}
+
+fn open_redirect_predicate(observation: &OpenRedirectObservation) -> bool {
+    [301, 302, 303, 307, 308].contains(&observation.status)
+        && observation.location.as_deref() == Some(observation.canary_url.as_str())
+}
+
+fn open_redirect_retest_is_conclusive(observation: &OpenRedirectObservation) -> bool {
+    // A transport-complete 4xx/5xx can be a transient gateway, rate-limit,
+    // authentication, or target failure. Only a normal 2xx/3xx application
+    // response can establish that the previously proven predicate is absent.
+    (200..400).contains(&observation.status)
+}
+
+fn action_observes_url(action: &ToolAction, expected: &str) -> bool {
+    let observed = match action {
+        ToolAction::HttpGet { url } | ToolAction::WebDiscoveryFetch { url, .. } => url,
+        _ => return false,
+    };
+    if observed == expected {
+        return true;
+    }
+    let canonical = |value: &str| {
+        url::Url::parse(value).ok().map(|mut parsed| {
+            parsed.set_fragment(None);
+            parsed.to_string()
+        })
+    };
+    canonical(observed).is_some_and(|observed| Some(observed) == canonical(expected))
+}
+
 fn proof_matches(proof: &Proof, receipt: &Receipt) -> bool {
     if !receipt.output.successful {
         return false;
@@ -2398,7 +3351,7 @@ fn proof_matches(proof: &Proof, receipt: &Receipt) -> bool {
     let d = &receipt.output.data;
     match proof {
         Proof::MissingHeader { url, header } => {
-            matches!(&receipt.output.action,ToolAction::HttpGet{url:u} if u==url)
+            action_observes_url(&receipt.output.action, url)
                 && [
                     "content-security-policy",
                     "x-content-type-options",
@@ -2416,7 +3369,7 @@ fn proof_matches(proof: &Proof, receipt: &Receipt) -> bool {
                     || d["body"].as_str().unwrap_or_default().contains("<html"))
         }
         Proof::InsecureCookie { url, flag } => {
-            matches!(&receipt.output.action,ToolAction::HttpGet{url:u} if u==url)
+            action_observes_url(&receipt.output.action, url)
                 && ["secure", "http_only", "same_site"].contains(&flag.as_str())
                 && d["cookie_security"]
                     .as_array()
@@ -2439,6 +3392,9 @@ fn proof_matches(proof: &Proof, receipt: &Receipt) -> bool {
             matches!(&receipt.output.action,ToolAction::TcpConnect{host:h,port:p} if h==host&&p==port)
                 && d["open"] == true
         }
+        Proof::OpenRedirect { .. } => open_redirect_observation_for_proof(proof, receipt)
+            .as_ref()
+            .is_some_and(open_redirect_predicate),
         Proof::Manual { .. } => false,
     }
 }
@@ -2497,10 +3453,16 @@ pub async fn retest_with_overrides(
             || matches!(
                 run.findings[index].state,
                 FindingState::RetestedFixed | FindingState::OperatorAccepted
-            ),
-        "only confirmed/fixed/operator-accepted findings can be retested"
+            )
+            || (run.findings[index].state == FindingState::NeedsReview
+                && !matches!(proof, Proof::Manual { .. })
+                && run.findings[index]
+                    .validations
+                    .iter()
+                    .any(|validation| validation.reproduced)),
+        "retest requires a confirmed, fixed, operator-accepted, or previously reproduced inconclusive finding"
     );
-    let mut action = proof_action(&proof).context("manual proof requires manual retest")?;
+    let mut action = proof_action(&proof)?.context("manual proof requires manual retest")?;
     if let ToolAction::SourceRead {
         start_line,
         end_line,
@@ -2535,6 +3497,15 @@ pub async fn retest_with_overrides(
             (
                 proof_matches(&proof, &receipt),
                 receipt.output.successful && (200..300).contains(&status),
+            )
+        }
+        Proof::OpenRedirect { .. } => {
+            let observation = open_redirect_observation_for_proof(&proof, &receipt);
+            (
+                observation.as_ref().is_some_and(open_redirect_predicate),
+                observation
+                    .as_ref()
+                    .is_some_and(open_redirect_retest_is_conclusive),
             )
         }
         _ => (proof_matches(&proof, &receipt), receipt.output.successful),
@@ -2623,6 +3594,278 @@ fn parse_browser_kind(value: &str) -> Result<BrowserKind> {
     })
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiscoveryStageRecord {
+    schema_version: u32,
+    stage_key: String,
+    plan_hash: String,
+    artifact_hash: String,
+    complete: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum DiscoveryIntentState {
+    Pending,
+    Receipted,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiscoveryOperationIntent {
+    schema_version: u32,
+    plan_hash: String,
+    request_id: String,
+    action: ToolAction,
+    state: DiscoveryIntentState,
+    receipt_id: Option<String>,
+}
+
+impl DiscoveryOperationIntent {
+    fn pending(plan_hash: String, request_id: String, action: ToolAction) -> Self {
+        Self {
+            schema_version: DISCOVERY_SCHEMA_VERSION,
+            plan_hash,
+            request_id,
+            action,
+            state: DiscoveryIntentState::Pending,
+            receipt_id: None,
+        }
+    }
+
+    fn validate(
+        &self,
+        plan_hash: &str,
+        request: &DiscoveryRequest,
+        action: &ToolAction,
+    ) -> Result<()> {
+        ensure!(
+            self.schema_version == DISCOVERY_SCHEMA_VERSION
+                && self.plan_hash == plan_hash
+                && self.request_id == request.request_id
+                && &self.action == action,
+            "discovery operation intent does not match the frontier head"
+        );
+        ensure!(
+            matches!(self.state, DiscoveryIntentState::Pending) == self.receipt_id.is_none(),
+            "discovery operation intent state contradicts receipt lineage"
+        );
+        Ok(())
+    }
+}
+
+const OPEN_REDIRECT_INTENT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenRedirectOperationIntent {
+    schema_version: u32,
+    stage_key: String,
+    endpoint: String,
+    parameter: String,
+    action: ToolAction,
+    state: DiscoveryIntentState,
+    receipt_id: Option<String>,
+}
+
+impl OpenRedirectOperationIntent {
+    fn pending(stage_key: String, endpoint: String, parameter: String, action: ToolAction) -> Self {
+        Self {
+            schema_version: OPEN_REDIRECT_INTENT_SCHEMA_VERSION,
+            stage_key,
+            endpoint,
+            parameter,
+            action,
+            state: DiscoveryIntentState::Pending,
+            receipt_id: None,
+        }
+    }
+
+    fn validate(&self, stage_key: &str, endpoint: &str, parameter: &str) -> Result<()> {
+        ensure!(
+            self.schema_version == OPEN_REDIRECT_INTENT_SCHEMA_VERSION
+                && self.stage_key == stage_key
+                && self.endpoint == endpoint
+                && self.parameter == parameter,
+            "open-redirect operation intent does not match the requested stage"
+        );
+        let ToolAction::OpenRedirectProbe {
+            endpoint: action_endpoint,
+            parameter: action_parameter,
+            canary,
+        } = &self.action
+        else {
+            anyhow::bail!("open-redirect operation intent contains the wrong action type");
+        };
+        ensure!(
+            action_endpoint == endpoint && action_parameter == parameter,
+            "open-redirect operation intent action contradicts its stage"
+        );
+        validate_open_redirect_inputs(action_parameter, canary)?;
+        ensure!(
+            matches!(self.state, DiscoveryIntentState::Pending) == self.receipt_id.is_none(),
+            "open-redirect operation intent state contradicts receipt lineage"
+        );
+        Ok(())
+    }
+}
+
+enum DiscoveryTransition {
+    Observation(DiscoveryObservation),
+    Failure(DiscoveryFailure),
+}
+
+fn default_discovery_plan(target: &str) -> Result<DiscoveryPlan> {
+    let mut seed = url::Url::parse(target).context("invalid web discovery seed URL")?;
+    seed.set_fragment(None);
+    let seed = seed.to_string();
+    let plan = DiscoveryPlan {
+        schema_version: DISCOVERY_SCHEMA_VERSION,
+        plan_id: format!("default-{}", &hash(seed.as_bytes())[..16]),
+        seed_urls: vec![seed.clone()],
+        allowed_origins: vec![url::Url::parse(&seed)?.origin().ascii_serialization()],
+        bounds: DiscoveryBounds::default(),
+    };
+    plan.canonicalized()
+}
+
+fn discovery_action_matches(
+    action: &ToolAction,
+    plan: &DiscoveryPlan,
+    request: &DiscoveryRequest,
+) -> bool {
+    let Ok(expected_plan_hash) = plan.fingerprint() else {
+        return false;
+    };
+    matches!(
+        action,
+        ToolAction::WebDiscoveryFetch {
+            plan_hash,
+            request_id,
+            url,
+            allowed_origins,
+            max_response_bytes,
+        } if plan_hash == &expected_plan_hash
+            && request_id == &request.request_id
+            && url == &request.url
+            && allowed_origins == &plan.allowed_origins
+            && *max_response_bytes == plan.bounds.max_document_bytes
+    )
+}
+
+fn discovery_transition_from_receipt(
+    plan: &DiscoveryPlan,
+    request: &DiscoveryRequest,
+    receipt: &Receipt,
+) -> Result<DiscoveryTransition> {
+    ensure!(
+        receipt.actor == "web-discovery",
+        "discovery receipt actor mismatch"
+    );
+    ensure!(
+        discovery_action_matches(&receipt.output.action, plan, request),
+        "discovery receipt action does not match the BFS frontier head"
+    );
+    let lineage = ReceiptLineage {
+        receipt_id: receipt.id.clone(),
+        receipt_content_hash: receipt.content_hash.clone(),
+    };
+    if !receipt.output.successful {
+        let raw_detail = receipt.output.data["error"]
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or("web discovery acquisition failed");
+        let (detail, _) = bounded_utf8(raw_detail, 1_024);
+        return Ok(DiscoveryTransition::Failure(DiscoveryFailure {
+            schema_version: DISCOVERY_SCHEMA_VERSION,
+            request_id: request.request_id.clone(),
+            code: discovery_failure_code(&detail),
+            detail,
+            receipt: lineage,
+        }));
+    }
+
+    let status = receipt.output.data["status"]
+        .as_u64()
+        .context("successful discovery receipt lacks an HTTP status")?;
+    let status = u16::try_from(status).context("discovery HTTP status is out of range")?;
+    let effective_url = receipt.output.data["url"]
+        .as_str()
+        .context("successful discovery receipt lacks an effective URL")?;
+    let body = receipt.output.data["body"]
+        .as_str()
+        .context("successful discovery receipt lacks a response body")?;
+    let (body, locally_truncated) =
+        bounded_utf8(body, usize::try_from(plan.bounds.max_document_bytes)?);
+    let media_type = receipt.output.data["headers"]["content-type"]
+        .as_str()
+        .map(|value| {
+            value
+                .split(';')
+                .next()
+                .unwrap_or(value)
+                .trim()
+                .to_ascii_lowercase()
+        })
+        .filter(|value| !value.is_empty());
+    Ok(DiscoveryTransition::Observation(
+        DiscoveryObservation::from_body(
+            request,
+            effective_url,
+            status,
+            media_type,
+            body,
+            receipt.output.truncated || locally_truncated,
+            lineage,
+        ),
+    ))
+}
+
+fn bounded_utf8(value: &str, limit: usize) -> (String, bool) {
+    if value.len() <= limit {
+        return (value.to_owned(), false);
+    }
+    let mut end = limit;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    (value[..end].to_owned(), true)
+}
+
+fn discovery_failure_code(detail: &str) -> AcquisitionFailureCode {
+    let detail = detail.to_ascii_lowercase();
+    if detail.contains("timeout") || detail.contains("timed out") {
+        AcquisitionFailureCode::Timeout
+    } else if detail.contains("dns")
+        || detail.contains("name resolution")
+        || detail.contains("failed to lookup")
+    {
+        AcquisitionFailureCode::Dns
+    } else if detail.contains("tls")
+        || detail.contains("certificate")
+        || detail.contains("handshake")
+    {
+        AcquisitionFailureCode::Tls
+    } else if detail.contains("redirect") {
+        AcquisitionFailureCode::RedirectRejected
+    } else if detail.contains("scope")
+        || detail.contains("policy")
+        || detail.contains("authorization")
+        || detail.contains("budget")
+        || detail.contains("allowed origin")
+    {
+        AcquisitionFailureCode::PolicyRejected
+    } else if detail.contains("connect") || detail.contains("refused") {
+        AcquisitionFailureCode::Connection
+    } else if detail.contains("body") {
+        AcquisitionFailureCode::BodyUnavailable
+    } else {
+        AcquisitionFailureCode::Transport
+    }
+}
+
 fn stage_key(name: &str, value: &impl Serialize) -> Result<String> {
     Ok(format!(
         "stage:{name}:{}",
@@ -2671,7 +3914,6 @@ fn derive_web_chain_facts(url: &str, data: &Value, facts: &mut BTreeSet<String>)
         .to_ascii_lowercase();
     let combined = format!("{url}\n{body}");
     for (needle, fact) in [
-        ("cors", "cors_candidate"),
         ("upload", "upload_surface"),
         ("session", "session_cookie_seen"),
         ("forgot-password", "password_reset_surface"),
@@ -2700,30 +3942,45 @@ fn derive_web_chain_facts(url: &str, data: &Value, facts: &mut BTreeSet<String>)
 }
 
 fn derive_candidate_chain_facts(candidate: &Candidate, facts: &mut BTreeSet<String>) {
-    let text = format!(
-        "{}\n{}\n{}",
-        candidate.title, candidate.description, candidate.location
-    )
-    .to_ascii_lowercase();
-    for (needle, fact) in [
-        ("cors", "cors_candidate"),
-        ("cache", "cache_candidate"),
-        ("upload", "upload_surface"),
-        ("session", "session_cookie_seen"),
-        ("password reset", "password_reset_surface"),
-        ("oauth", "oauth_surface"),
-        ("object authorization", "object_api_seen"),
-        ("idor", "object_api_seen"),
-        ("graphql", "graphql_seen"),
-        ("api/v1", "versioned_api_seen"),
-        ("route", "source_routes_seen"),
-        ("rag", "rag_surface_seen"),
-        ("retrieval", "rag_surface_seen"),
-    ] {
-        if text.contains(needle) {
-            facts.insert(fact.into());
+    match &candidate.proof {
+        Proof::InsecureCookie { .. } => {
+            facts.insert("session_cookie_seen".into());
         }
+        Proof::OpenPort { .. } => {
+            facts.insert("host_port_seen".into());
+        }
+        Proof::SourceRule { .. } => {
+            facts.insert("source_manifest_seen".into());
+        }
+        Proof::MissingHeader { .. } | Proof::OpenRedirect { .. } | Proof::Manual { .. } => {}
     }
+}
+
+fn finding_is_chain_eligible(finding: &Finding, receipt_ids: &BTreeSet<String>) -> bool {
+    matches!(
+        finding.state,
+        FindingState::Confirmed | FindingState::RetestedPresent
+    ) && !finding.candidate.receipt_ids.is_empty()
+        && finding
+            .candidate
+            .receipt_ids
+            .iter()
+            .all(|receipt_id| receipt_ids.contains(receipt_id))
+        && !finding.claim_receipts.is_empty()
+        && finding
+            .claim_receipts
+            .values()
+            .flatten()
+            .all(|receipt_id| receipt_ids.contains(receipt_id))
+        && finding.validations.iter().any(|validation| {
+            validation.reproduced
+                && validation.actor != finding.finder
+                && !validation.receipt_ids.is_empty()
+                && validation
+                    .receipt_ids
+                    .iter()
+                    .all(|receipt_id| receipt_ids.contains(receipt_id))
+        })
 }
 
 fn cloud_severity(value: cloud_runtime::FindingSeverity) -> Severity {
@@ -2854,6 +4111,8 @@ pub fn default_config(mode: Mode, targets: Vec<String>, output_dir: PathBuf) -> 
         model_panel: None,
         browser: None,
         cloud_plan: None,
+        discovery_plan: None,
+        discovery_plan_hash: None,
         chains: None,
         playbooks: None,
         max_steps: 20,
@@ -2890,6 +4149,16 @@ pub async fn local_demo(output: &Path) -> Result<RunSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn loopback_discovery_plan(seed: &str, plan_id: &str) -> Result<DiscoveryPlan> {
+        Ok(DiscoveryPlan {
+            schema_version: DISCOVERY_SCHEMA_VERSION,
+            plan_id: plan_id.into(),
+            seed_urls: vec![seed.into()],
+            allowed_origins: vec![url::Url::parse(seed)?.origin().ascii_serialization()],
+            bounds: DiscoveryBounds::default(),
+        })
+    }
     #[test]
     fn live_cloud_iam_artifact_requires_common_receipt_lineage() -> Result<()> {
         let mut result = WorkflowResult::default();
@@ -2916,6 +4185,83 @@ mod tests {
         assert_eq!(artifact.source_observation_count, 1);
         assert_eq!(artifact.audit_receipts, receipts);
         assert_eq!(artifact.graph.edges.len(), 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_seed_secrets_are_rejected_before_run_persistence_unless_overridden(
+    ) -> Result<()> {
+        let input = tempfile::tempdir()?;
+        let plan_path = input.path().join("plan.json");
+        let seed = "http://127.0.0.1:32123/?token=operator-supplied-secret";
+        write_json(&plan_path, &loopback_discovery_plan(seed, "secret-seed")?)?;
+
+        let rejected_output = tempfile::tempdir()?;
+        let mut rejected = default_config(
+            Mode::Blackbox,
+            vec!["http://127.0.0.1:32123/".into()],
+            rejected_output.path().into(),
+        )?;
+        rejected.authorized = true;
+        rejected.discovery_plan = Some(plan_path.clone());
+        assert!(Engine::new(rejected).is_err());
+        assert!(!rejected_output
+            .path()
+            .join("configured-web-discovery-plan.json")
+            .exists());
+
+        let default_output = tempfile::tempdir()?;
+        let mut default_target = default_config(
+            Mode::Blackbox,
+            vec![seed.into()],
+            default_output.path().into(),
+        )?;
+        default_target.authorized = true;
+        let mut default_engine = Engine::new(default_target)?;
+        assert!(default_engine.run().await.is_err());
+        assert!(!default_output.path().join("web-discovery").exists());
+        assert!(
+            !std::fs::read_to_string(default_output.path().join("run-manifest.json"))?
+                .contains("operator-supplied-secret")
+        );
+
+        let overridden_output = tempfile::tempdir()?;
+        let mut overridden = default_config(
+            Mode::Blackbox,
+            vec!["http://127.0.0.1:32123/".into()],
+            overridden_output.path().into(),
+        )?;
+        overridden.authorized = true;
+        overridden.discovery_plan = Some(plan_path);
+        overridden.overrides = ExpertOverrides {
+            controls: vec![Control::SecretExposure, Control::SecretRedaction],
+            reason: "Explicit fixture query-secret exposure and receipt retention".into(),
+            actor: "test-operator".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let mut engine = Engine::new(overridden)?;
+        assert_eq!(
+            engine.snapshot.config.discovery_plan_hash,
+            Some(loopback_discovery_plan(seed, "secret-seed")?.fingerprint()?)
+        );
+        let run = engine.run().await?;
+        assert_eq!(run.status, RunStatus::Complete);
+        let evidence = EvidenceStore::new(
+            &overridden_output.path().join("receipts"),
+            &run.id,
+            Redactor::with_override(&run.config.overrides),
+        )?;
+        assert!(evidence.manifest()?.iter().any(|receipt| {
+            matches!(&receipt.output.action, ToolAction::WebDiscoveryFetch { url, .. } if url.contains("operator-supplied-secret"))
+                && receipt
+                    .expert_override
+                    .as_ref()
+                    .is_some_and(|overrides| {
+                        overrides.controls.contains(&Control::SecretExposure)
+                            && overrides.controls.contains(&Control::SecretRedaction)
+                    })
+        }));
         Ok(())
     }
 
@@ -2952,6 +4298,1159 @@ mod tests {
         assert!(d.path().join("report.sarif").exists());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn configured_web_discovery_is_receipt_rebuilt_and_never_follows_redirects() -> Result<()>
+    {
+        use std::sync::atomic::AtomicUsize;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let sink_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let sink_url = format!("http://{}", sink_listener.local_addr()?);
+        let sink_contacts = Arc::new(AtomicUsize::new(0));
+        let sink_counter = sink_contacts.clone();
+        let sink_server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = sink_listener.accept().await {
+                sink_counter.fetch_add(1, Ordering::SeqCst);
+                let _ = stream
+                    .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let server_base = base_url.clone();
+        let redirect_destination = sink_url.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let base = server_base.clone();
+                let sink = redirect_destination.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 8192];
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let target = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let (status, content_type, extra_headers, body) = match target {
+                        "/" => (
+                            "200 OK",
+                            "text/html",
+                            String::new(),
+                            format!(r#"<html><script src="/app.js"></script><a href="/openapi.json">api</a><a href="/robots.txt">robots</a><a href="/jump">jump</a><a href="{sink}/outside?next=%2Fhome">outside-plan-origin</a><form method="post" action="/submit"><input name="email" value="must-not-be-stored" required><input type="password" name="password"></form></html>"#),
+                        ),
+                        "/app.js" => (
+                            "200 OK",
+                            "application/javascript",
+                            String::new(),
+                            "const endpoint = '/js-discovered';".to_owned(),
+                        ),
+                        "/openapi.json" => (
+                            "200 OK",
+                            "application/json",
+                            String::new(),
+                            r#"{"openapi":"3.0.0","paths":{"/pets":{"get":{"operationId":"listPets"}}}}"#.to_owned(),
+                        ),
+                        "/robots.txt" => (
+                            "200 OK",
+                            "text/plain",
+                            String::new(),
+                            format!("User-agent: *\nDisallow: /admin\nSitemap: {base}/sitemap.xml\n"),
+                        ),
+                        "/sitemap.xml" => (
+                            "200 OK",
+                            "application/xml",
+                            String::new(),
+                            format!("<urlset><url><loc>{base}/from-sitemap</loc></url></urlset>"),
+                        ),
+                        "/jump" => (
+                            "302 Found",
+                            "text/plain",
+                            format!("Location: {sink}\r\n"),
+                            String::new(),
+                        ),
+                        _ => (
+                            "200 OK",
+                            "text/plain",
+                            String::new(),
+                            "fixture".to_owned(),
+                        ),
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let output = tempfile::tempdir()?;
+        let plan_path = output.path().join("discovery-input.json");
+        let plan = DiscoveryPlan {
+            schema_version: DISCOVERY_SCHEMA_VERSION,
+            plan_id: "configured-loopback-surface".into(),
+            seed_urls: vec![format!("{base_url}/")],
+            allowed_origins: vec![url::Url::parse(&base_url)?.origin().ascii_serialization()],
+            bounds: DiscoveryBounds::default(),
+        };
+        write_json(&plan_path, &plan)?;
+        let mut config = default_config(
+            Mode::Blackbox,
+            vec![format!("{base_url}/")],
+            output.path().into(),
+        )?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let sink_scope = policy::scope_for_url(&sink_url)?;
+        config.scope.network.extend(sink_scope.network);
+        config.scope.allow_private |= sink_scope.allow_private;
+        config.discovery_plan = Some(plan_path);
+        let mut engine = Engine::new(config)?;
+        let run = engine.run().await?;
+
+        server.abort();
+        sink_server.abort();
+        assert_eq!(run.status, RunStatus::Complete);
+        assert_eq!(sink_contacts.load(Ordering::SeqCst), 0);
+        let decision = run
+            .decisions
+            .iter()
+            .find(|decision| decision["action"] == "web_discovery")
+            .context("web discovery decision missing")?;
+        assert_eq!(decision["complete"], true);
+        assert_eq!(decision["finding_count_created"], 0);
+        let artifact_path = output.path().join(
+            decision["artifact"]
+                .as_str()
+                .context("discovery artifact path missing")?,
+        );
+        let artifact: DiscoveryArtifact = read_json(&artifact_path)?;
+        artifact.validate()?;
+        assert!(artifact.complete);
+        assert!(artifact
+            .resources
+            .iter()
+            .any(|resource| resource.url.ends_with("/app.js")));
+        assert!(artifact.forms.iter().any(|form| {
+            form.action_url.ends_with("/submit")
+                && form
+                    .controls
+                    .iter()
+                    .any(|control| control.name.as_deref() == Some("email") && control.required)
+        }));
+        assert!(artifact
+            .operations
+            .iter()
+            .any(|operation| { operation.method == "GET" && operation.path_template == "/pets" }));
+        assert!(artifact
+            .robots_directives
+            .iter()
+            .any(|directive| directive.value == "/admin"));
+        assert!(artifact.omissions.iter().any(|omission| {
+            omission.reason == web_discovery::OmissionReason::OutsideAllowedOrigin
+                && omission.subject.contains("/outside")
+        }));
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            &run.id,
+            Redactor::default(),
+        )?;
+        let discovery_receipts = evidence
+            .manifest()?
+            .into_iter()
+            .filter(|receipt| receipt.actor == "web-discovery")
+            .collect::<Vec<_>>();
+        assert!(!discovery_receipts.is_empty());
+        assert!(discovery_receipts.iter().all(|receipt| {
+            matches!(receipt.output.action, ToolAction::WebDiscoveryFetch { .. })
+                && receipt.output.data["request_count"] == 1
+                && receipt.output.data["redirect_followed"] == false
+        }));
+        assert!(discovery_receipts.iter().any(|receipt| {
+            matches!(&receipt.output.action, ToolAction::WebDiscoveryFetch { url, .. } if url.ends_with("/jump"))
+                && receipt.output.data["status"] == 302
+        }));
+        let report = std::fs::read_to_string(output.path().join("report.md"))?;
+        assert!(report.contains(
+            decision["artifact_hash"]
+                .as_str()
+                .context("discovery artifact hash missing")?
+        ));
+        let stage_path = artifact_path
+            .parent()
+            .context("discovery artifact directory missing")?
+            .join("stage.json");
+        let mut stage: DiscoveryStageRecord = read_json(&stage_path)?;
+        stage.artifact_hash = "0".repeat(64);
+        write_json(&stage_path, &stage)?;
+        assert!(engine.run_web_discovery(plan).await.is_err());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configured_discovery_plan_is_run_bound_and_mutation_is_rejected() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 1024];
+                    let _ = stream.read(&mut buffer).await;
+                    let body = "<html>bound plan</html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let source = tempfile::tempdir()?;
+        let source_plan = source.path().join("plan.json");
+        write_json(&source_plan, &loopback_discovery_plan(&url, "bound-plan")?)?;
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url.clone()], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        config.discovery_plan = Some(source_plan.clone());
+        {
+            let mut engine = Engine::new(config)?;
+            engine.control.pause.store(true, Ordering::SeqCst);
+            assert_eq!(engine.run().await?.status, RunStatus::Paused);
+        }
+        write_json(
+            &source_plan,
+            &loopback_discovery_plan(&url, "mutated-external-plan")?,
+        )?;
+        let run = Engine::resume(output.path())?.run().await?;
+        assert_eq!(run.status, RunStatus::Complete);
+        assert!(run
+            .decisions
+            .iter()
+            .any(|decision| decision["plan_id"] == "bound-plan"));
+        server.abort();
+
+        let second = tempfile::tempdir()?;
+        write_json(
+            &source_plan,
+            &loopback_discovery_plan(&url, "bound-plan-2")?,
+        )?;
+        let mut config = default_config(Mode::Blackbox, vec![url], second.path().into())?;
+        config.authorized = true;
+        config.discovery_plan = Some(source_plan);
+        {
+            let mut engine = Engine::new(config)?;
+            engine.control.pause.store(true, Ordering::SeqCst);
+            assert_eq!(engine.run().await?.status, RunStatus::Paused);
+        }
+        let bound_path = second.path().join("configured-web-discovery-plan.json");
+        let mut bound: DiscoveryPlan = read_json(&bound_path)?;
+        bound.plan_id = "tampered-bound-plan".into();
+        write_json(&bound_path, &bound)?;
+        assert!(Engine::resume(second.path()).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn run_output_and_bound_plan_paths_are_canonical_with_spaces_and_unicode() -> Result<()> {
+        let input = tempfile::tempdir()?;
+        let plan_path = input.path().join("plan.json");
+        write_json(
+            &plan_path,
+            &loopback_discovery_plan("http://127.0.0.1:32124/", "canonical-path")?,
+        )?;
+        let output = tempfile::Builder::new()
+            .prefix("metis black Ω ")
+            .tempdir_in(".")?;
+        let relative_output = output
+            .path()
+            .strip_prefix(std::env::current_dir()?)?
+            .to_path_buf();
+        assert!(!relative_output.is_absolute());
+        let mut config = default_config(
+            Mode::Blackbox,
+            vec!["http://127.0.0.1:32124/".into()],
+            relative_output.clone(),
+        )?;
+        config.authorized = true;
+        config.discovery_plan = Some(plan_path);
+        let engine = Engine::new(config)?;
+        let canonical_output = relative_output.canonicalize()?;
+        assert_eq!(engine.snapshot.config.output_dir, canonical_output);
+        assert_eq!(
+            engine.snapshot.config.discovery_plan,
+            Some(canonical_output.join("configured-web-discovery-plan.json"))
+        );
+        drop(engine);
+        let resumed = Engine::resume(&canonical_output)?;
+        assert_eq!(resumed.snapshot.config.output_dir, canonical_output);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_pauses_mid_frontier_and_resumes_without_repeating_receipts() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let root_contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let second_contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_roots = root_contacts.clone();
+        let server_seconds = second_contacts.clone();
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(
+            Mode::Blackbox,
+            vec![format!("{base_url}/")],
+            output.path().into(),
+        )?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let pause = engine.control.pause.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let roots = server_roots.clone();
+                let seconds = server_seconds.clone();
+                let pause = pause.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let path = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let body = if path == "/" {
+                        roots.fetch_add(1, Ordering::SeqCst);
+                        "<html><a href=\"/second\">second</a></html>"
+                    } else {
+                        seconds.fetch_add(1, Ordering::SeqCst);
+                        "<html>second</html>"
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    if path == "/" {
+                        pause.store(true, Ordering::SeqCst);
+                    }
+                });
+            }
+        });
+        let plan = loopback_discovery_plan(&format!("{base_url}/"), "mid-frontier-pause")?;
+        assert!(engine.run_web_discovery(plan.clone()).await?.is_none());
+        assert_eq!(engine.snapshot.status, RunStatus::Paused);
+        assert_eq!(root_contacts.load(Ordering::SeqCst), 1);
+        assert_eq!(second_contacts.load(Ordering::SeqCst), 0);
+        drop(engine);
+
+        let mut resumed = Engine::resume(output.path())?;
+        let artifact = resumed
+            .run_web_discovery(plan)
+            .await?
+            .context("resumed discovery did not complete")?;
+        assert!(artifact.complete);
+        assert_eq!(root_contacts.load(Ordering::SeqCst), 1);
+        assert_eq!(second_contacts.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_cancellation_after_contact_cannot_complete_or_repeat_the_stage() -> Result<()>
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url.clone()], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let cancel = engine.control.cancel.clone();
+        let server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+                cancel.store(true, Ordering::SeqCst);
+                let body = "<html>cancelled after contact</html>";
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        let plan = loopback_discovery_plan(&url, "mid-request-cancel")?;
+        let stage = stage_key("web-discovery", &plan.clone().canonicalized()?)?;
+        assert!(engine.run_web_discovery(plan.clone()).await?.is_none());
+        assert_eq!(engine.snapshot.status, RunStatus::Cancelled);
+        assert!(!engine.snapshot.completed_targets.contains(&stage));
+        drop(engine);
+
+        let mut resumed = Engine::resume(output.path())?;
+        let artifact = resumed
+            .run_web_discovery(plan)
+            .await?
+            .context("cancelled discovery did not resume")?;
+        assert!(artifact.complete);
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        server.await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_recovers_post_receipt_pending_intent_and_reconciles_manifest() -> Result<()>
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer).await;
+                    let body = "<html>sealed before intent update</html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url.clone()], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let plan = loopback_discovery_plan(&url, "post-receipt-recovery")?.canonicalized()?;
+        let plan_hash = plan.fingerprint()?;
+        let session = DiscoverySession::start(plan.clone())?;
+        let request = session
+            .checkpoint()
+            .frontier
+            .first()
+            .context("discovery seed request missing")?
+            .clone();
+        let action = ToolAction::WebDiscoveryFetch {
+            plan_hash: plan_hash.clone(),
+            request_id: request.request_id.clone(),
+            url: request.url.clone(),
+            allowed_origins: plan.allowed_origins.clone(),
+            max_response_bytes: plan.bounds.max_document_bytes,
+        };
+        let directory = output.path().join("web-discovery").join(&plan_hash[..24]);
+        let intents_dir = directory.join("intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!(
+            "intent-{}.json",
+            hash(request.request_id.as_bytes())
+        ));
+        write_json(
+            &intent_path,
+            &DiscoveryOperationIntent::pending(
+                plan_hash,
+                request.request_id.clone(),
+                action.clone(),
+            ),
+        )?;
+        let sealed = engine.tool("web-discovery", action).await?;
+        engine
+            .snapshot
+            .receipt_ids
+            .retain(|receipt_id| receipt_id != &sealed.id);
+        engine.checkpoint()?;
+        drop(engine);
+
+        let mut resumed = Engine::resume(output.path())?;
+        let artifact = resumed
+            .run_web_discovery(plan)
+            .await?
+            .context("recovered discovery did not complete")?;
+        assert!(artifact.complete);
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        assert!(resumed.snapshot.receipt_ids.contains(&sealed.id));
+        let recovered: DiscoveryOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recovered.state, DiscoveryIntentState::Receipted);
+        assert_eq!(recovered.receipt_id.as_deref(), Some(sealed.id.as_str()));
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn discovery_recovers_sealed_receipt_when_intent_file_is_missing() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer).await;
+                    let body = "<html>receipt survived missing intent</html>";
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url.clone()], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let plan = loopback_discovery_plan(&url, "missing-intent-recovery")?.canonicalized()?;
+        let plan_hash = plan.fingerprint()?;
+        let session = DiscoverySession::start(plan.clone())?;
+        let request = session
+            .checkpoint()
+            .frontier
+            .first()
+            .context("discovery seed request missing")?
+            .clone();
+        let action = ToolAction::WebDiscoveryFetch {
+            plan_hash,
+            request_id: request.request_id,
+            url: request.url,
+            allowed_origins: plan.allowed_origins.clone(),
+            max_response_bytes: plan.bounds.max_document_bytes,
+        };
+        let sealed = engine.tool("web-discovery", action).await?;
+        engine
+            .snapshot
+            .receipt_ids
+            .retain(|receipt_id| receipt_id != &sealed.id);
+        engine.checkpoint()?;
+        drop(engine);
+
+        let mut resumed = Engine::resume(output.path())?;
+        let artifact = resumed
+            .run_web_discovery(plan)
+            .await?
+            .context("missing-intent discovery did not complete")?;
+        assert!(artifact.complete);
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        assert!(resumed.snapshot.receipt_ids.contains(&sealed.id));
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_discovery_intent_is_indeterminate_and_not_repeated() -> Result<()> {
+        use std::sync::atomic::AtomicUsize;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let contacts = Arc::new(AtomicUsize::new(0));
+        let observed = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((_stream, _)) = listener.accept().await {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let input = tempfile::tempdir()?;
+        let plan_path = input.path().join("plan.json");
+        write_json(
+            &plan_path,
+            &loopback_discovery_plan(&url, "intent-recovery")?,
+        )?;
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url], output.path().into())?;
+        config.authorized = true;
+        config.discovery_plan = Some(plan_path);
+        {
+            let mut engine = Engine::new(config)?;
+            engine.control.pause.store(true, Ordering::SeqCst);
+            assert_eq!(engine.run().await?.status, RunStatus::Paused);
+        }
+        let plan: DiscoveryPlan =
+            read_json(&output.path().join("configured-web-discovery-plan.json"))?;
+        let plan_hash = plan.fingerprint()?;
+        let directory = output.path().join("web-discovery").join(&plan_hash[..24]);
+        let checkpoint: web_discovery::DiscoveryCheckpoint =
+            read_json(&directory.join("checkpoint.json"))?;
+        let request = checkpoint
+            .frontier
+            .first()
+            .context("paused discovery frontier missing")?;
+        let action = ToolAction::WebDiscoveryFetch {
+            plan_hash: plan_hash.clone(),
+            request_id: request.request_id.clone(),
+            url: request.url.clone(),
+            allowed_origins: plan.allowed_origins.clone(),
+            max_response_bytes: plan.bounds.max_document_bytes,
+        };
+        let intent =
+            DiscoveryOperationIntent::pending(plan_hash, request.request_id.clone(), action);
+        let intent_path = directory.join("intents").join(format!(
+            "intent-{}.json",
+            hash(request.request_id.as_bytes())
+        ));
+        write_json(&intent_path, &intent)?;
+
+        let run = Engine::resume(output.path())?.run().await?;
+        server.abort();
+        assert_eq!(run.status, RunStatus::Complete);
+        assert_eq!(contacts.load(Ordering::SeqCst), 0);
+        let recovered: DiscoveryOperationIntent = read_json(&intent_path)?;
+        assert_eq!(recovered.state, DiscoveryIntentState::Indeterminate);
+        let receipt_id = recovered
+            .receipt_id
+            .context("indeterminate intent receipt missing")?;
+        assert!(run.receipt_ids.contains(&receipt_id));
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            &run.id,
+            Redactor::default(),
+        )?;
+        let receipt = evidence.get(&receipt_id)?;
+        assert!(!receipt.output.successful);
+        assert_eq!(receipt.output.data["indeterminate_after_crash"], true);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tampered_discovery_checkpoint_fails_before_network_io() -> Result<()> {
+        use std::sync::atomic::AtomicUsize;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        let contacts = Arc::new(AtomicUsize::new(0));
+        let observed = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((_stream, _)) = listener.accept().await {
+                observed.fetch_add(1, Ordering::SeqCst);
+            }
+        });
+        let input = tempfile::tempdir()?;
+        let plan_path = input.path().join("plan.json");
+        write_json(
+            &plan_path,
+            &loopback_discovery_plan(&url, "checkpoint-tamper")?,
+        )?;
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url], output.path().into())?;
+        config.authorized = true;
+        config.discovery_plan = Some(plan_path);
+        {
+            let mut engine = Engine::new(config)?;
+            engine.control.pause.store(true, Ordering::SeqCst);
+            assert_eq!(engine.run().await?.status, RunStatus::Paused);
+        }
+        let plan: DiscoveryPlan =
+            read_json(&output.path().join("configured-web-discovery-plan.json"))?;
+        let plan_hash = plan.fingerprint()?;
+        let checkpoint_path = output
+            .path()
+            .join("web-discovery")
+            .join(&plan_hash[..24])
+            .join("checkpoint.json");
+        let mut checkpoint: web_discovery::DiscoveryCheckpoint = read_json(&checkpoint_path)?;
+        checkpoint.resources.clear();
+        write_json(&checkpoint_path, &checkpoint)?;
+        let mut resumed = Engine::resume(output.path())?;
+        assert!(resumed.run().await.is_err());
+        server.abort();
+        assert_eq!(contacts.load(Ordering::SeqCst), 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_redirect_validation_replays_with_fresh_canaries_and_retests_truthfully(
+    ) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let base_url = format!("http://{}", listener.local_addr()?);
+        let redirect_enabled = Arc::new(AtomicBool::new(true));
+        let transient_error = Arc::new(AtomicBool::new(false));
+        let server_enabled = redirect_enabled.clone();
+        let server_transient = transient_error.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let enabled = server_enabled.clone();
+                let transient = server_transient.clone();
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 8192];
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let request_target = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let parsed = url::Url::parse(&format!("http://fixture{request_target}"));
+                    let redirect = parsed.as_ref().ok().and_then(|url| {
+                        (url.path() == "/redirect")
+                            .then(|| {
+                                url.query_pairs()
+                                    .find(|(key, _)| key == "next")
+                                    .map(|(_, value)| value.into_owned())
+                            })
+                            .flatten()
+                    });
+                    let response = if transient.load(Ordering::SeqCst) {
+                        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_owned()
+                    } else {
+                        let redirect_response = if enabled.load(Ordering::SeqCst) {
+                            redirect.map(|location| {
+                                format!(
+                                    "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                                )
+                            })
+                        } else {
+                            None
+                        };
+                        redirect_response.unwrap_or_else(|| {
+                            let body = "<html><a href=\"/redirect?next=%2Fhome\">continue</a></html>";
+                            format!(
+                                "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                                body.len()
+                            )
+                        })
+                    };
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(
+            Mode::Blackbox,
+            vec![format!("{base_url}/")],
+            output.path().into(),
+        )?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let run = Engine::new(config)?.run().await?;
+        let finding = run
+            .findings
+            .iter()
+            .find(|finding| matches!(finding.candidate.proof, Proof::OpenRedirect { .. }))
+            .context("open-redirect finding missing")?;
+        assert_eq!(finding.state, FindingState::Confirmed);
+        let (endpoint, parameter) = match &finding.candidate.proof {
+            Proof::OpenRedirect {
+                endpoint,
+                parameter,
+            } => (endpoint.as_str(), parameter.as_str()),
+            _ => unreachable!("selected finding is an open-redirect proof"),
+        };
+        let completed_stage = stage_key("open-redirect-probe", &(endpoint, parameter))?;
+        assert_eq!(
+            run.completed_targets
+                .iter()
+                .filter(|stage| *stage == &completed_stage)
+                .count(),
+            1
+        );
+        let finding_id = finding.id.clone();
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            &run.id,
+            Redactor::default(),
+        )?;
+        let initial = evidence.get(&finding.candidate.receipt_ids[0])?;
+        let replay_id = finding
+            .validations
+            .iter()
+            .find(|validation| validation.reproduced)
+            .and_then(|validation| validation.receipt_ids.first())
+            .context("independent replay receipt missing")?;
+        let replay = evidence.get(replay_id)?;
+        let canary = |receipt: &Receipt| match &receipt.output.action {
+            ToolAction::OpenRedirectProbe { canary, .. } => Some(canary.clone()),
+            _ => None,
+        };
+        assert_ne!(canary(&initial), canary(&replay));
+
+        let present = retest(output.path(), &finding_id, true).await?;
+        assert_eq!(
+            present
+                .findings
+                .iter()
+                .find(|finding| finding.id == finding_id)
+                .context("retested finding missing")?
+                .state,
+            FindingState::RetestedPresent
+        );
+        transient_error.store(true, Ordering::SeqCst);
+        let transient = retest(output.path(), &finding_id, true).await?;
+        assert_eq!(
+            transient
+                .findings
+                .iter()
+                .find(|finding| finding.id == finding_id)
+                .context("transient retest finding missing")?
+                .state,
+            FindingState::NeedsReview
+        );
+        transient_error.store(false, Ordering::SeqCst);
+        redirect_enabled.store(false, Ordering::SeqCst);
+        let fixed = retest(output.path(), &finding_id, true).await?;
+        assert_eq!(
+            fixed
+                .findings
+                .iter()
+                .find(|finding| finding.id == finding_id)
+                .context("fixed finding missing")?
+                .state,
+            FindingState::RetestedFixed
+        );
+        server.abort();
+        let inconclusive = retest(output.path(), &finding_id, true).await?;
+        assert_eq!(
+            inconclusive
+                .findings
+                .iter()
+                .find(|finding| finding.id == finding_id)
+                .context("inconclusive finding missing")?
+                .state,
+            FindingState::NeedsReview
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn positive_open_redirect_probe_remains_recoverable_until_finding_is_persisted(
+    ) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/redirect", listener.local_addr()?);
+        let target = format!("{endpoint}?next=%2Fhome");
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 8192];
+                    let read = stream.read(&mut buffer).await.unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..read]);
+                    let target = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+                    let location = url::Url::parse(&format!("http://fixture{target}"))
+                        .ok()
+                        .and_then(|url| {
+                            url.query_pairs()
+                                .find(|(key, _)| key == "next")
+                                .map(|(_, value)| value.into_owned())
+                        })
+                        .unwrap_or_else(|| "/".into());
+                    let response = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![target], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let stage = stage_key("open-redirect-probe", &(endpoint.as_str(), "next"))?;
+        let receipt = engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await?
+            .context("positive probe receipt missing")?;
+        assert!(!engine.snapshot.completed_targets.contains(&stage));
+        assert!(engine.snapshot.findings.is_empty());
+        drop(engine);
+
+        let mut resumed = Engine::resume(output.path())?;
+        let recovered = resumed
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await?
+            .context("positive probe was not recoverable")?;
+        assert_eq!(recovered.id, receipt.id);
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        resumed
+            .add_candidate(
+                open_redirect_candidate(&endpoint, "next", &recovered.id),
+                "open-redirect-validator",
+                None,
+            )
+            .await?;
+        resumed.snapshot.completed_targets.push(stage.clone());
+        resumed.checkpoint()?;
+        assert_eq!(resumed.snapshot.findings.len(), 1);
+        assert_eq!(
+            resumed
+                .snapshot
+                .completed_targets
+                .iter()
+                .filter(|entry| *entry == &stage)
+                .count(),
+            1
+        );
+        assert_eq!(contacts.load(Ordering::SeqCst), 2);
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolved_open_redirect_intent_rejects_swapped_receipt_lineage() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/redirect", listener.local_addr()?);
+        let target = format!("{endpoint}?next=%2Fhome");
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer).await;
+                    let response =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![target], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let first_action = ToolAction::OpenRedirectProbe {
+            endpoint: endpoint.clone(),
+            parameter: "next".into(),
+            canary: random_id("redirect")?,
+        };
+        let first = engine
+            .tool("open-redirect-validator", first_action.clone())
+            .await?;
+        let second = engine
+            .tool(
+                "open-redirect-validator",
+                ToolAction::OpenRedirectProbe {
+                    endpoint: endpoint.clone(),
+                    parameter: "next".into(),
+                    canary: random_id("redirect")?,
+                },
+            )
+            .await?;
+        let stage = stage_key("open-redirect-probe", &(endpoint.as_str(), "next"))?;
+        let intents_dir = output.path().join("open-redirect-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!("intent-{}.json", hash(stage.as_bytes())));
+        let mut intent = OpenRedirectOperationIntent::pending(
+            stage.clone(),
+            endpoint.clone(),
+            "next".into(),
+            first_action,
+        );
+        intent.state = DiscoveryIntentState::Receipted;
+        intent.receipt_id = Some(second.id);
+        write_json(&intent_path, &intent)?;
+
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await
+            .is_err());
+        assert_eq!(contacts.load(Ordering::SeqCst), 2);
+        assert_ne!(first.id, intent.receipt_id.unwrap_or_default());
+        server.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_redirect_failure_requires_explicit_retry_and_never_claims_coverage() -> Result<()>
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let reservation = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = reservation.local_addr()?;
+        drop(reservation);
+        let endpoint = format!("http://{address}/redirect");
+        let target = format!("{endpoint}?next=%2Fhome");
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![target], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let stage = stage_key("open-redirect-probe", &(endpoint.as_str(), "next"))?;
+        let failed = format!("failed:{stage}");
+
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await
+            .is_err());
+        assert!(engine.snapshot.completed_targets.contains(&failed));
+        assert!(!engine.snapshot.completed_targets.contains(&stage));
+        assert!(engine
+            .snapshot
+            .limitations
+            .iter()
+            .any(|limitation| { limitation.contains("No negative coverage claim was made") }));
+        let receipt_count = engine.runtime.evidence.manifest()?.len();
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await
+            .is_err());
+        assert_eq!(engine.runtime.evidence.manifest()?.len(), receipt_count);
+
+        assert_eq!(engine.retry_failed_stages()?, 1);
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let listener = tokio::net::TcpListener::bind(address).await?;
+        let server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+                let response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(response.as_bytes()).await;
+            }
+        });
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await?
+            .is_none());
+        server.await?;
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        assert!(engine.snapshot.completed_targets.contains(&stage));
+        assert!(!engine.snapshot.completed_targets.contains(&failed));
+        assert!(engine.snapshot.decisions.iter().any(|decision| {
+            decision["action"] == "retry_stage_consumed" && decision["stage"] == failed
+        }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn pending_open_redirect_intent_becomes_indeterminate_without_repeating_request(
+    ) -> Result<()> {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/redirect", listener.local_addr()?);
+        let target = format!("{endpoint}?next=%2Fhome");
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![target], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let stage = stage_key("open-redirect-probe", &(endpoint.as_str(), "next"))?;
+        let intents_dir = output.path().join("open-redirect-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!("intent-{}.json", hash(stage.as_bytes())));
+        let action = ToolAction::OpenRedirectProbe {
+            endpoint: endpoint.clone(),
+            parameter: "next".into(),
+            canary: random_id("redirect")?,
+        };
+        write_json(
+            &intent_path,
+            &OpenRedirectOperationIntent::pending(
+                stage.clone(),
+                endpoint.clone(),
+                "next".into(),
+                action,
+            ),
+        )?;
+
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await
+            .is_err());
+        let intent: OpenRedirectOperationIntent = read_json(&intent_path)?;
+        assert_eq!(intent.state, DiscoveryIntentState::Indeterminate);
+        let receipt = engine.runtime.evidence.get(
+            intent
+                .receipt_id
+                .as_deref()
+                .context("indeterminate receipt missing")?,
+        )?;
+        assert_eq!(receipt.output.data["indeterminate_after_crash"], true);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(100), listener.accept())
+                .await
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn missing_open_redirect_intent_recovers_sealed_receipt_without_network_repeat(
+    ) -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/redirect", listener.local_addr()?);
+        let target = format!("{endpoint}?next=%2Fhome");
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 4096];
+                    let _ = stream.read(&mut buffer).await;
+                    let response =
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                    let _ = stream.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![target], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let stage = stage_key("open-redirect-probe", &(endpoint.as_str(), "next"))?;
+
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await?
+            .is_none());
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        let intent_path = output
+            .path()
+            .join("open-redirect-intents")
+            .join(format!("intent-{}.json", hash(stage.as_bytes())));
+        std::fs::remove_file(intent_path)?;
+        engine
+            .snapshot
+            .completed_targets
+            .retain(|entry| entry != &stage);
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await?
+            .is_none());
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        server.abort();
+        Ok(())
+    }
+
     #[tokio::test]
     async fn fabricated_receipts_rejected() -> Result<()> {
         let d = tempfile::tempdir()?;
@@ -2978,6 +5477,75 @@ mod tests {
             )
             .await?;
         assert_eq!(engine.snapshot.findings[0].state, FindingState::Rejected);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn confirmation_lineage_excludes_receipts_that_do_not_match_the_proof() -> Result<()> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let request_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_count = request_count.clone();
+        let server = tokio::spawn(async move {
+            while let Ok((mut stream, _)) = listener.accept().await {
+                let ordinal = server_count.fetch_add(1, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer).await;
+                    let body = "<html><p>lineage fixture</p></html>";
+                    let policy = if ordinal == 0 {
+                        "Content-Security-Policy: default-src 'self'\r\n"
+                    } else {
+                        ""
+                    };
+                    let reply = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n{policy}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(reply.as_bytes()).await;
+                });
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![url.clone()], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let non_supporting = engine
+            .tool(
+                "fixture-non-supporting",
+                ToolAction::HttpGet { url: url.clone() },
+            )
+            .await?;
+        let supporting = engine
+            .tool(
+                "fixture-supporting",
+                ToolAction::HttpGet { url: url.clone() },
+            )
+            .await?;
+        let mut candidate = header_candidate(&url, "content-security-policy", &supporting.id);
+        candidate.receipt_ids = vec![non_supporting.id.clone(), supporting.id.clone()];
+        let id = engine
+            .add_candidate(candidate, "deterministic-http", None)
+            .await?;
+        server.abort();
+
+        let finding = engine
+            .snapshot
+            .findings
+            .iter()
+            .find(|finding| finding.id == id)
+            .context("finding missing")?;
+        assert_eq!(finding.state, FindingState::Confirmed);
+        let lineage = finding
+            .claim_receipts
+            .values()
+            .next()
+            .context("claim lineage missing")?;
+        assert!(lineage.contains(&supporting.id));
+        assert!(!lineage.contains(&non_supporting.id));
+        assert_eq!(lineage.len(), 2, "supporting observation plus replay");
         Ok(())
     }
     #[tokio::test]
@@ -3111,5 +5679,51 @@ mod tests {
             decision["action"] == "typed_chain_catalog" && decision["executed"] == 1
         }));
         Ok(())
+    }
+
+    #[test]
+    fn chain_facts_ignore_finding_prose_and_operator_acceptance() {
+        let mut candidate = header_candidate(
+            "https://example.test/",
+            "content-security-policy",
+            "receipt-primary",
+        );
+        candidate.title = "CORS upload OAuth GraphQL session compromise".into();
+        candidate.description = "Untrusted prose mentions every chain surface.".into();
+        candidate.location = "/api/v1/reset".into();
+        let mut facts = BTreeSet::new();
+        derive_candidate_chain_facts(&candidate, &mut facts);
+        assert!(facts.is_empty(), "prose must not create causal facts");
+
+        let validations = vec![Validation {
+            actor: "independent-reproducer".into(),
+            receipt_ids: vec!["receipt-replay".into()],
+            reproduced: true,
+            reason: "fixture".into(),
+            timestamp_ms: 1,
+        }];
+        let claim_receipts = BTreeMap::from([(
+            "typed claim".into(),
+            vec!["receipt-primary".into(), "receipt-replay".into()],
+        )]);
+        let receipt_ids = BTreeSet::from(["receipt-primary".into(), "receipt-replay".into()]);
+        let finding = Finding {
+            id: "finding-chain-fixture".into(),
+            candidate,
+            state: FindingState::Confirmed,
+            finder: "deterministic-http".into(),
+            validations,
+            review_reason: String::new(),
+            introduced: None,
+            claim_receipts,
+            confirmation_override: None,
+        };
+        assert!(finding_is_chain_eligible(&finding, &receipt_ids));
+        let mut accepted = finding.clone();
+        accepted.state = FindingState::OperatorAccepted;
+        assert!(!finding_is_chain_eligible(&accepted, &receipt_ids));
+        let mut missing_replay = receipt_ids;
+        missing_replay.remove("receipt-replay");
+        assert!(!finding_is_chain_eligible(&finding, &missing_replay));
     }
 }

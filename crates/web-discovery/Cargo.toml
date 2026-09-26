@@ -1,0 +1,18 @@
+[package]
+name = "web-discovery"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+regex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+storage = { package = "metisblack-storage", path = "../storage" }
+url.workspace = true
+
+[lints]
+workspace = true

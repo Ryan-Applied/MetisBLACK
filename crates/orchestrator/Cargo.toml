@@ -25,6 +25,7 @@ browser_runtime = { package = "metisblack-browser-runtime", path = "../browser-r
 cloud_runtime = { package = "metisblack-cloud-runtime", path = "../cloud-runtime" }
 model_panel = { package = "metisblack-model-panel", path = "../model-panel" }
 chain_engine = { package = "metisblack-chain-engine", path = "../chain-engine" }
+web-discovery.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true

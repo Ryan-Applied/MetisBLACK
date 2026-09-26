@@ -2,7 +2,7 @@ project: "MetisBLACK"
 program: "P0-P2 production parity"
 last_updated: "2026-09-27T00:00:00+10:00"
 sprint: 1
-objective: "Establish reusable typed browser-role, source-flow, and cloud-IAM foundations"
+objective: "Establish reusable typed browser-role, source-flow, cloud-IAM, web-discovery, and narrow web-validation foundations"
 stories:
   E01-S01:
     file: "docs/stories/story-E01-S01.md"
@@ -16,6 +16,14 @@ stories:
     file: "docs/stories/story-E03-S01.md"
     status: "done"
     owner: "cloud-runtime swarm"
+  E04-S01:
+    file: "docs/stories/story-E04-S01.md"
+    status: "in-progress"
+    owner: "web-discovery swarm"
+  E04-S02:
+    file: "docs/stories/story-E04-S02.md"
+    status: "in-progress"
+    owner: "web-validation swarm"
   E12-S01:
     file: "docs/stories/story-E12-S01.md"
     status: "done"

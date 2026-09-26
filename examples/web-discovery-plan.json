@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "plan_id": "owned-local-web-lab",
+  "seed_urls": [
+    "http://127.0.0.1:8080/",
+    "http://127.0.0.1:8080/robots.txt",
+    "http://127.0.0.1:8080/openapi.json"
+  ],
+  "allowed_origins": [
+    "http://127.0.0.1:8080"
+  ],
+  "bounds": {
+    "max_depth": 3,
+    "max_resources": 64,
+    "max_document_bytes": 1048576,
+    "max_references_per_document": 256,
+    "max_forms_per_document": 64,
+    "max_controls_per_form": 128,
+    "max_openapi_operations": 1000,
+    "max_omissions": 1000
+  }
+}

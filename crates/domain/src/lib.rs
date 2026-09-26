@@ -8,6 +8,7 @@ use std::{
 };
 
 pub const SCHEMA_VERSION: u32 = 1;
+pub const OPEN_REDIRECT_OBSERVATION_SCHEMA_VERSION: u32 = 1;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -261,6 +262,24 @@ pub enum ToolAction {
     HttpGet {
         url: String,
     },
+    /// Fetch exactly one response for the bounded discovery state machine.
+    /// Redirects are never followed and `allowed_origins` is an immutable
+    /// acquisition boundary, not merely artifact metadata.
+    WebDiscoveryFetch {
+        plan_hash: String,
+        request_id: String,
+        url: String,
+        allowed_origins: Vec<String>,
+        max_response_bytes: u32,
+    },
+    /// Observe one response to a controlled open-redirect probe. The runtime
+    /// constructs the probe value from `canary`; callers cannot supply an
+    /// arbitrary redirect destination through this action.
+    OpenRedirectProbe {
+        endpoint: String,
+        parameter: String,
+        canary: String,
+    },
     HttpRequest {
         url: String,
         method: String,
@@ -307,6 +326,8 @@ impl ToolAction {
     pub fn name(&self) -> &'static str {
         match self {
             Self::HttpGet { .. } => "http_get",
+            Self::WebDiscoveryFetch { .. } => "web_discovery_fetch",
+            Self::OpenRedirectProbe { .. } => "open_redirect_probe",
             Self::HttpRequest { .. } => "http_request",
             Self::CreateAccount { .. } => "create_account",
             Self::AiPrompt { .. } => "ai_prompt",
@@ -320,6 +341,8 @@ impl ToolAction {
     pub fn target(&self) -> String {
         match self {
             Self::HttpGet { url } => url.clone(),
+            Self::WebDiscoveryFetch { url, .. } => url.clone(),
+            Self::OpenRedirectProbe { endpoint, .. } => endpoint.clone(),
             Self::HttpRequest { url, .. }
             | Self::CreateAccount { url, .. }
             | Self::AiPrompt { url, .. } => url.clone(),
@@ -329,6 +352,127 @@ impl ToolAction {
             Self::External { target, .. } => target.clone(),
         }
     }
+}
+
+/// Authorization evidence embedded in live observations. Keeping this typed
+/// prevents receipt consumers from silently ignoring whether an execution was
+/// ordinarily authorized or admitted by an audited override.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AuthorizationProvenance {
+    pub authorized: bool,
+    pub explicit_override: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ObservationKind {
+    OpenRedirect,
+}
+
+/// Strict receipt data for an observe-only open-redirect probe.
+///
+/// `location_matches_canary` reports only an exact match with the runtime-built
+/// `canary_url`; it is an observation, not by itself a confirmed finding.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OpenRedirectObservation {
+    pub schema_version: u32,
+    pub kind: ObservationKind,
+    pub endpoint: String,
+    pub parameter: String,
+    pub canary: String,
+    pub probe_url: String,
+    pub canary_url: String,
+    pub status: u16,
+    pub location: Option<String>,
+    pub location_matches_canary: bool,
+    pub headers: BTreeMap<String, String>,
+    pub body_hash: String,
+    pub resolved_addresses: Vec<String>,
+    pub request_count: u8,
+    pub redirect_followed: bool,
+    pub authorization_provenance: AuthorizationProvenance,
+}
+
+impl OpenRedirectObservation {
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == OPEN_REDIRECT_OBSERVATION_SCHEMA_VERSION,
+            "unsupported open-redirect observation schema"
+        );
+        ensure!(
+            self.kind == ObservationKind::OpenRedirect,
+            "invalid open-redirect observation kind"
+        );
+        validate_open_redirect_inputs(&self.parameter, &self.canary)?;
+        ensure!(
+            !self.endpoint.is_empty(),
+            "open-redirect endpoint is required"
+        );
+        ensure!(
+            !self.probe_url.is_empty(),
+            "open-redirect probe URL is required"
+        );
+        ensure!(
+            self.canary_url == open_redirect_canary_url(&self.canary)?,
+            "open-redirect canary URL does not match the canary"
+        );
+        ensure!(
+            self.location_matches_canary
+                == self
+                    .location
+                    .as_deref()
+                    .is_some_and(|v| v == self.canary_url),
+            "open-redirect match flag contradicts the observed Location"
+        );
+        ensure!(
+            self.request_count == 1 && !self.redirect_followed,
+            "open-redirect probes must observe exactly one response without following redirects"
+        );
+        ensure!(
+            !self.body_hash.is_empty() && !self.resolved_addresses.is_empty(),
+            "open-redirect observation is incomplete"
+        );
+        Ok(())
+    }
+}
+
+pub fn validate_open_redirect_inputs(parameter: &str, canary: &str) -> Result<()> {
+    ensure!(
+        (1..=64).contains(&parameter.len())
+            && parameter.is_ascii()
+            && parameter
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'.' | b'~'))
+            && parameter
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric),
+        "invalid open-redirect query parameter"
+    );
+    ensure!(
+        (8..=128).contains(&canary.len())
+            && canary.is_ascii()
+            && canary
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && canary
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && canary
+                .as_bytes()
+                .last()
+                .is_some_and(u8::is_ascii_alphanumeric),
+        "invalid open-redirect canary"
+    );
+    Ok(())
+}
+
+pub fn open_redirect_canary_url(canary: &str) -> Result<String> {
+    validate_open_redirect_inputs("url", canary)?;
+    Ok(format!("https://metisblack.invalid/{canary}"))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -389,7 +533,10 @@ impl FindingState {
             (Hypothesis, Candidate | Rejected | NeedsReview)
                 | (Candidate, Reproduced | NeedsReview | Rejected)
                 | (Reproduced, Confirmed | NeedsReview | Rejected)
-                | (NeedsReview, Candidate | Rejected)
+                | (
+                    NeedsReview,
+                    Candidate | Rejected | RetestedFixed | RetestedPresent
+                )
                 | (
                     Confirmed | RetestedPresent | RetestedFixed | OperatorAccepted,
                     RetestedFixed | RetestedPresent | NeedsReview
@@ -420,6 +567,10 @@ pub enum Proof {
     OpenPort {
         host: String,
         port: u16,
+    },
+    OpenRedirect {
+        endpoint: String,
+        parameter: String,
     },
     Manual {
         procedure: String,
@@ -605,6 +756,15 @@ pub struct RunConfig {
     /// never credential values.
     #[serde(default)]
     pub cloud_plan: Option<PathBuf>,
+    /// Optional strict web-discovery plan consumed only by black-box and
+    /// grey-box modes. The plan is persisted separately so this shared domain
+    /// crate does not depend on the discovery implementation crate.
+    #[serde(default)]
+    pub discovery_plan: Option<PathBuf>,
+    /// SHA-256 fingerprint of the canonical plan copied into the run
+    /// directory. Set by the engine before the first checkpoint.
+    #[serde(default)]
+    pub discovery_plan_hash: Option<String>,
     #[serde(default)]
     pub chains: Option<ChainRunConfig>,
     #[serde(default)]
@@ -784,6 +944,20 @@ impl RunConfig {
                 "live cloud mode requires cloud_plan"
             );
         }
+        if self.discovery_plan.is_some() {
+            ensure!(
+                matches!(self.mode, Mode::Blackbox | Mode::Greybox),
+                "web discovery plans require black-box or grey-box mode"
+            );
+        }
+        if let Some(plan_hash) = &self.discovery_plan_hash {
+            ensure!(
+                self.discovery_plan.is_some()
+                    && plan_hash.len() == 64
+                    && plan_hash.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                "discovery_plan_hash requires a canonical discovery plan and SHA-256 value"
+            );
+        }
         if let Some(panel) = &self.model_panel {
             ensure!(
                 panel.members.len() >= 2 && panel.quorum >= 2,
@@ -880,5 +1054,53 @@ mod tests {
             r#"{"tool":"http_get","url":"http://localhost","scope":"*"}"#
         )
         .is_err());
+    }
+    #[test]
+    fn open_redirect_contract_rejects_ambiguous_inputs_and_contradictions() -> Result<()> {
+        for parameter in ["", "next&admin", "na me", "ümlaut", ".leading"] {
+            assert!(validate_open_redirect_inputs(parameter, "canary-123456").is_err());
+        }
+        for canary in [
+            "short",
+            "Uppercase-123",
+            "leading space",
+            "-leading-123",
+            "trailing-123-",
+        ] {
+            assert!(validate_open_redirect_inputs("next", canary).is_err());
+        }
+        validate_open_redirect_inputs("redirect_uri", "canary-123456")?;
+
+        let mut observation = OpenRedirectObservation {
+            schema_version: OPEN_REDIRECT_OBSERVATION_SCHEMA_VERSION,
+            kind: ObservationKind::OpenRedirect,
+            endpoint: "https://example.test/redirect".into(),
+            parameter: "next".into(),
+            canary: "canary-123456".into(),
+            probe_url:
+                "https://example.test/redirect?next=https%3A%2F%2Fmetisblack.invalid%2Fcanary-123456"
+                    .into(),
+            canary_url: "https://metisblack.invalid/canary-123456".into(),
+            status: 302,
+            location: Some("https://metisblack.invalid/canary-123456".into()),
+            location_matches_canary: true,
+            headers: BTreeMap::new(),
+            body_hash: "fixture-hash".into(),
+            resolved_addresses: vec!["192.0.2.1:443".into()],
+            request_count: 1,
+            redirect_followed: false,
+            authorization_provenance: AuthorizationProvenance {
+                authorized: true,
+                explicit_override: false,
+            },
+        };
+        observation.validate()?;
+        observation.redirect_followed = true;
+        assert!(observation.validate().is_err());
+
+        let mut serialized = serde_json::to_value(&observation)?;
+        serialized["untyped_claim"] = serde_json::json!(true);
+        assert!(serde_json::from_value::<OpenRedirectObservation>(serialized).is_err());
+        Ok(())
     }
 }

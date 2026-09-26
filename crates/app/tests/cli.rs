@@ -47,6 +47,72 @@ fn cli_control_and_builtin_catalogs_are_machine_readable() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn discovery_plan_is_wired_for_blackbox_and_greybox_only() -> Result<()> {
+    let binary = env!("CARGO_BIN_EXE_metisblack");
+    let fixture = tempfile::tempdir()?;
+    let discovery_plan = fixture.path().join("web-discovery.json");
+    let discovery_plan_arg = discovery_plan.display().to_string();
+
+    let blackbox = Command::new(binary)
+        .args([
+            "run",
+            "https://example.test",
+            "--dry-run",
+            "--discovery-plan",
+            &discovery_plan_arg,
+        ])
+        .output()?;
+    assert!(
+        blackbox.status.success(),
+        "{}",
+        String::from_utf8_lossy(&blackbox.stderr)
+    );
+    let blackbox_config: Value = serde_json::from_slice(&blackbox.stdout)?;
+    assert_eq!(blackbox_config["mode"], "blackbox");
+    assert_eq!(
+        blackbox_config["discovery_plan"],
+        discovery_plan.display().to_string()
+    );
+
+    let greybox = Command::new(binary)
+        .args([
+            "greybox",
+            &fixture.path().display().to_string(),
+            "--url",
+            "https://example.test",
+            "--dry-run",
+            "--discovery-plan",
+            &discovery_plan_arg,
+        ])
+        .output()?;
+    assert!(
+        greybox.status.success(),
+        "{}",
+        String::from_utf8_lossy(&greybox.stderr)
+    );
+    let greybox_config: Value = serde_json::from_slice(&greybox.stdout)?;
+    assert_eq!(greybox_config["mode"], "greybox");
+    assert_eq!(
+        greybox_config["discovery_plan"],
+        discovery_plan.display().to_string()
+    );
+
+    let rejected = Command::new(binary)
+        .args([
+            "whitebox",
+            &fixture.path().display().to_string(),
+            "--dry-run",
+            "--discovery-plan",
+            &discovery_plan_arg,
+        ])
+        .output()?;
+    assert!(!rejected.status.success());
+    assert!(String::from_utf8_lossy(&rejected.stderr)
+        .contains("web discovery plans require black-box or grey-box mode"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn saved_actions_display_effective_unsafe_banners() -> Result<()> {
     let binary = env!("CARGO_BIN_EXE_metisblack");

@@ -52,9 +52,10 @@ candidate -> independent replay -> finding state -> reports / CI gate
   resumed.
 
 The workspace is split into small crates for domain contracts, policy, evidence,
-tool execution, providers, source analysis, planning, orchestration, storage,
-reporting, integrations, browser and cloud execution, model validation, typed
-chains, the playbook library, and the application. See
+tool execution, receipt-backed web discovery, providers, source analysis,
+planning, orchestration, storage, reporting, integrations, browser and cloud
+execution, model validation, typed chains, the playbook library, and the
+application. See
 [architecture](docs/architecture.md) for the dependency direction.
 
 ## Build and verify
@@ -95,6 +96,11 @@ cargo run --locked -p metisblack-app -- \
 # Authorized HTTP review
 cargo run --locked -p metisblack-app -- \
   run https://app.example.test --authorize --output ./runs/http-review
+
+# Authorized bounded discovery with a strict plan
+cargo run --locked -p metisblack-app -- \
+  run http://127.0.0.1:8080/ --discovery-plan ./examples/web-discovery-plan.json \
+  --authorize --output ./runs/web-discovery
 
 # Explicit TCP exposure inventory
 cargo run --locked -p metisblack-app -- \
@@ -153,6 +159,21 @@ is not a claim of broad technique coverage.
 Run `metisblack --help` and `metisblack <command> --help` for the authoritative
 CLI syntax.
 
+Black-box and grey-box runs use a finite, same-plan-origin breadth-first discovery
+plan. The default plan is generated from the target; `--discovery-plan` accepts a
+strict versioned plan such as [examples/web-discovery-plan.json](examples/web-discovery-plan.json).
+Discovery observes HTML links, script references, form shapes, robots/sitemaps,
+bounded JavaScript URL hints, and OpenAPI v2/v3 declarations. It does not execute
+JavaScript, submit forms, invoke declared API operations, or create a finding by
+itself. Bounds above the defaults require an audited `data_sampling` override and
+remain subject to hard finite ceilings.
+
+Discovered query parameters may be checked by the narrow open-redirect validator.
+Each check sends one GET with a fresh `https://metisblack.invalid/` canary and
+never follows, resolves, or contacts the reported destination. Only an exact
+canary `Location` with an allowed redirect status can enter independent replay;
+successful acquisition alone is not a vulnerability verdict.
+
 ## Finding and evidence semantics
 
 - A candidate is an unconfirmed claim.
@@ -201,6 +222,10 @@ Depending on the mode, a run directory can contain:
 - `findings.json`, `report.json`, `report.md`, `report.html`, and `report.sarif`
 - `source-inventory.json`, `diff-context.json`, and an exported PR source snapshot
 - `source-flow-analysis.json` with bounded lexical paths and explicit limitations
+- `web-discovery/<plan-hash>/plan.json`, atomic `checkpoint.json`, `artifact.json`,
+  and `stage.json` with receipt and canonical-hash lineage
+- durable discovery and open-redirect operation intents, including explicit
+  indeterminate/failed-stage retry provenance
 - provider-step records and account-cleanup state
 - `browser-plan-result.json` or `browser-authenticated-workflow-result.json`, private browser artifacts, and common browser receipts
 - `cloud-live-result.json`, `cloud-iam-graph.json`, verified identity/command audits, and common cloud receipts
@@ -215,11 +240,9 @@ disabled by an expert override.
 ## CI and repository layout
 
 The workflows under `.github/workflows` run formatting, compilation, tests,
-Clippy, and `cargo-deny` for this directory when it is the repository root. GitHub
-does not discover nested workflows in the current parent repository; move this
-directory to its own repository or copy the workflows to the outer root when the
-rebuild is adopted. This rebuild does not alter the parent repository's existing
-workflow.
+Clippy, and `cargo-deny` from this repository root. Locked all-feature lanes run on
+Ubuntu, macOS arm64, and Windows in addition to the strict quality and dependency
+policy jobs.
 
 Further reading: [product requirements](docs/product-requirements.md),
 [threat model](docs/threat-model.md), [migration](docs/migration.md), and the
