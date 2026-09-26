@@ -504,6 +504,10 @@ async fn pr_review_reports_only_changed_findings_as_introduced() -> Result<()> {
             .count(),
         1
     );
+    let changed_path = std::path::Path::new("nested")
+        .join("new.py")
+        .to_string_lossy()
+        .into_owned();
     assert!(run
         .findings
         .iter()
@@ -511,7 +515,7 @@ async fn pr_review_reports_only_changed_findings_as_introduced() -> Result<()> {
         .unwrap()
         .candidate
         .location
-        .contains("nested/new.py"));
+        .contains(&changed_path));
     assert!(integrations::gate_trips(
         &run.findings,
         Severity::Medium,
