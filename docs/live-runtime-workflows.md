@@ -213,6 +213,56 @@ receipts are traversable. Missing effective permissions, group membership and
 unapproved boundary crossings remain explicit non-traversable gaps. Identity
 mismatch stops enumeration.
 
+## Authenticated Claude and Codex subscription CLIs
+
+`--subscription-cli claude` and `--subscription-cli codex` select fixed native
+adapters that use the operator's existing CLI login. They do not accept arbitrary
+commands or argument templates and never read `key_env`. A strict JSON example
+for a mixed subscription panel is available at
+`examples/subscription-cli-panel.json`.
+
+Claude supports `inference_only`, `read_only`, `workspace_write`, and
+`unrestricted` (CLI spelling also accepts hyphens). Codex supports the final
+three modes; selecting Codex `inference_only` fails closed because the installed
+CLI exposes no verified no-tools mode. Every supported mode requires the explicit
+native-tool baseline overrides documented in `expert-overrides.md`. Write and
+unrestricted modes add their corresponding filesystem/state/command class
+controls. `unsafe_all` is the aggregate expert bypass.
+
+Unrestricted execution deliberately injects the provider flag:
+
+- Claude: `--dangerously-skip-permissions`
+- Codex: `--dangerously-bypass-approvals-and-sandbox`
+
+No safer mode includes either flag. `--subscription-profile-env` copies only
+named login/profile variables after `env_clear`. The optional
+`--subscription-inherit-environment` route is accepted only for unrestricted
+execution and records the inherited names, never their values, in audit;
+provider API-key variables remain excluded. Claude safe mode disables its native
+customizations by default. Codex ignores user config and exec-policy rules, but
+project instruction discovery such as `AGENTS.md` remains CLI-owned and is not a
+claimed isolation boundary. An unrestricted operator can re-enable the
+customization sources controlled by the adapter flags with
+`--subscription-load-native-customizations`; the descriptor and receipt expose
+that choice. Its side effects remain lower-assurance control-plane activity.
+
+Each specialist and model-panel call has a stable logical run/session/step or
+member/role/round binding. Recovery checks that binding before probing the CLI;
+an existing pending intent without its exact receipt becomes indeterminate even
+if the executable has disappeared, and the main turn is not repeated. A new call
+then prepares and version-probes one single-use invocation before sealing the
+intent with prompt/tool-schema hashes, provider/model, mode, executable/hash,
+fixed argv, environment names, ceilings and override provenance. Completion
+creates a common immutable control-plane receipt containing the normalized reply
+or bounded structured failure audit. Subscription panel members also disable
+automatic retry.
+
+Provider-native commands, edits, web requests and MCP activity are bounded audit
+events only. They are excluded from allowed target receipts, empirical finding
+proofs, model-panel evidence and attack-chain facts. Provider-owned read-only or
+workspace sandbox flags and direct-child cancellation are reported capabilities,
+not MetisBLACK OS-containment guarantees.
+
 ## Heterogeneous model validation
 
 Pass a panel file to any assessment with `--model-panel panel.json`:
@@ -254,11 +304,13 @@ Pass a panel file to any assessment with `--model-panel panel.json`:
 
 The panel rejects duplicate provider/model/deployment identities and panels that
 only masquerade as heterogeneous. Members get fresh contexts and independent
-token, cost, timeout, retry, and authorization budgets. Because native provider
-cost telemetry is not yet available, each member must configure at least one
-positive micro-USD-per-million-token fallback rate. Fabricated receipt IDs
-are rejected. Quorum promotes a candidate only into the ordinary harness
-validation path; it never creates empirical confirmation.
+token, cost, timeout, retry, and authorization budgets; subscription CLI members
+are single-attempt. API and CLI transports from one vendor remain one trust
+domain. When native cost telemetry is unavailable, each member must configure a
+positive micro-USD-per-million-token fallback rate. Fabricated receipt IDs and
+provider control-plane receipts are rejected as target evidence. Quorum promotes
+a candidate only into the ordinary harness validation path; it never creates
+empirical confirmation.
 
 ## Typed exploit-chain catalogue
 

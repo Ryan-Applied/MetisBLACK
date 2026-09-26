@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 use domain::{
     BrowserRunConfig, ChainRunConfig, Control, ExpertOverrides, Mode, ModelPanelConfig,
-    NetworkRule, ProviderConfig, RunConfig, RunSnapshot, Severity,
+    NetworkRule, ProviderConfig, RunConfig, RunSnapshot, Severity, SubscriptionCliConfig,
+    SubscriptionCliKind,
 };
 use std::{
     io::{self, IsTerminal, Write},
@@ -37,6 +38,41 @@ struct Cli {
     endpoint: Option<String>,
     #[arg(long, global = true)]
     key_env: Option<String>,
+    /// Use a typed locally authenticated provider CLI (`claude` or `codex`).
+    #[arg(long, global = true)]
+    subscription_cli: Option<String>,
+    /// Provider-CLI autonomy: inference-only, read-only, workspace-write, unrestricted.
+    /// Codex inference-only fails closed until its CLI exposes a verified no-tools mode.
+    #[arg(long, global = true)]
+    subscription_autonomy: Option<String>,
+    /// Optional absolute path to the provider CLI binary.
+    #[arg(long, global = true)]
+    subscription_executable: Option<PathBuf>,
+    /// Optional absolute working directory exposed to the provider CLI.
+    #[arg(long, global = true)]
+    subscription_working_dir: Option<PathBuf>,
+    /// Environment variable names exposed from the operator's login profile.
+    #[arg(
+        long = "subscription-profile-env",
+        alias = "subscription-profile-environment",
+        global = true,
+        value_delimiter = ','
+    )]
+    subscription_profile_environment: Vec<String>,
+    /// Inherit the ambient environment in unrestricted mode; audited overrides are required.
+    #[arg(long, global = true)]
+    subscription_inherit_environment: bool,
+    /// Re-enable the customization sources controlled by the selected CLI in unrestricted mode.
+    #[arg(long, global = true)]
+    subscription_load_native_customizations: bool,
+    #[arg(long, global = true)]
+    subscription_max_stdout_bytes: Option<u64>,
+    #[arg(long, global = true)]
+    subscription_max_stderr_bytes: Option<u64>,
+    #[arg(long, global = true)]
+    subscription_max_events: Option<u32>,
+    #[arg(long, global = true)]
+    subscription_max_turns: Option<u32>,
     #[arg(long, global = true)]
     playbooks: Option<PathBuf>,
     /// Heterogeneous model-panel JSON configuration.
@@ -227,6 +263,58 @@ fn overrides(cli: &Cli) -> Result<ExpertOverrides> {
     value.validate()?;
     Ok(value)
 }
+fn subscription_cli_config(cli: &Cli) -> Result<Option<SubscriptionCliConfig>> {
+    let has_options = cli.subscription_cli.is_some()
+        || cli.subscription_autonomy.is_some()
+        || cli.subscription_executable.is_some()
+        || cli.subscription_working_dir.is_some()
+        || !cli.subscription_profile_environment.is_empty()
+        || cli.subscription_inherit_environment
+        || cli.subscription_load_native_customizations
+        || cli.subscription_max_stdout_bytes.is_some()
+        || cli.subscription_max_stderr_bytes.is_some()
+        || cli.subscription_max_events.is_some()
+        || cli.subscription_max_turns.is_some();
+    if !has_options {
+        return Ok(None);
+    }
+    let kind = cli
+        .subscription_cli
+        .as_ref()
+        .context("subscription CLI options require --subscription-cli")?;
+    let kind: SubscriptionCliKind = serde_json::from_value(serde_json::json!(kind
+        .to_ascii_lowercase()
+        .replace('-', "_")))
+    .context("unknown subscription CLI; supported values are claude and codex")?;
+    let mut config = SubscriptionCliConfig::new(kind);
+    if let Some(autonomy) = &cli.subscription_autonomy {
+        config.autonomy = serde_json::from_value(serde_json::json!(
+            autonomy.to_ascii_lowercase().replace('-', "_")
+        ))
+        .context(
+            "unknown subscription autonomy; use inference-only, read-only, workspace-write, or unrestricted",
+        )?;
+    }
+    config.executable = cli.subscription_executable.clone();
+    config.working_directory = cli.subscription_working_dir.clone();
+    config.profile_environment = cli.subscription_profile_environment.clone();
+    config.inherit_environment = cli.subscription_inherit_environment;
+    config.load_native_customizations = cli.subscription_load_native_customizations;
+    if let Some(value) = cli.subscription_max_stdout_bytes {
+        config.max_stdout_bytes = value;
+    }
+    if let Some(value) = cli.subscription_max_stderr_bytes {
+        config.max_stderr_bytes = value;
+    }
+    if let Some(value) = cli.subscription_max_events {
+        config.max_events = value;
+    }
+    if let Some(value) = cli.subscription_max_turns {
+        config.max_turns = value;
+    }
+    config.validate()?;
+    Ok(Some(config))
+}
 fn configure(cli: &Cli, mode: Mode, targets: Vec<String>) -> Result<RunConfig> {
     let mut c = if let Some(path) = &cli.config {
         let c: RunConfig = storage::read_json(path)?;
@@ -244,8 +332,12 @@ fn configure(cli: &Cli, mode: Mode, targets: Vec<String>) -> Result<RunConfig> {
     } else {
         c.overrides.validate()?;
     }
+    let subscription_cli = subscription_cli_config(cli)?;
     if let Some(kind) = &cli.provider {
         let endpoint = cli.endpoint.clone().unwrap_or_else(|| {
+            if subscription_cli.is_some() {
+                return "local://subscription".into();
+            }
             match kind.as_str() {
                 "anthropic" => "https://api.anthropic.com",
                 "gemini" => "https://generativelanguage.googleapis.com",
@@ -262,7 +354,18 @@ fn configure(cli: &Cli, mode: Mode, targets: Vec<String>) -> Result<RunConfig> {
             key_env: cli.key_env.clone(),
             timeout_seconds: 60,
             max_output_tokens: 4096,
+            subscription_cli: subscription_cli.clone(),
         });
+    } else if let Some(subscription_cli) = subscription_cli {
+        let provider = c
+            .provider
+            .as_mut()
+            .context("--subscription-cli requires --provider or a configured provider")?;
+        provider.subscription_cli = Some(subscription_cli);
+        provider.endpoint = cli
+            .endpoint
+            .clone()
+            .unwrap_or_else(|| "local://subscription".into());
     }
     if cli.playbooks.is_some() {
         c.playbooks = cli.playbooks.clone();
@@ -287,9 +390,22 @@ async fn dispatch(cli: Cli) -> Result<i32> {
         Command::Models => {
             println!(
                 "{}",
-                serde_json::to_string_pretty(
-                    &serde_json::json!({"providers":["openai","openai-compatible","anthropic","gemini","ollama","llamacpp","mock"],"capabilities":{"tool_calling":true,"streaming":false,"token_telemetry":true,"cost_telemetry":false},"subscription":"Available only via explicit expert shell/tool-capability/sandbox overrides; no trusted subscription adapter is advertised."})
-                )?
+                serde_json::to_string_pretty(&serde_json::json!({
+                    "providers":["openai","openai-compatible","anthropic","gemini","ollama","llamacpp","mock"],
+                    "capabilities":{"tool_calling":true,"streaming":false,"token_telemetry":true,"cost_telemetry":false},
+                    "subscription_clis":{
+                        "supported":{
+                            "claude":{"provider":"anthropic","autonomy_modes":["inference_only","read_only","workspace_write","unrestricted"]},
+                            "codex":{
+                                "provider":"openai",
+                                "autonomy_modes":["read_only","workspace_write","unrestricted"],
+                                "unsupported_modes":{"inference_only":"installed CLI exposes no verified no-tools mode"}
+                            }
+                        },
+                        "pending":["gemini","grok"],
+                        "arbitrary_argv":false
+                    }
+                }))?
             );
             return Ok(0);
         }

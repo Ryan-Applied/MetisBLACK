@@ -56,10 +56,21 @@ risk/class controls and the applicable state-change budget. These subprocesses r
 with the user's OS authority and can defeat every application-level boundary,
 including modifying receipts or vault material accessible to that identity. Output
 capture is not containment. Environment inheritance and raw secret capture require
-their separate controls. Arbitrary subscription CLI execution may use this route,
-but no native subscription adapter or sandbox assurance is claimed. Do not pass
-production credentials to an untrusted child or treat unsafe-run evidence as
-equivalent assurance to default typed execution.
+their separate controls.
+
+The typed subscription-CLI boundary admits only Claude Code and Codex with
+adapter-owned argv and machine-readable output. It clears the child environment
+by default, copies only named login-profile variables, binds executable/version/
+hash/argv/environment metadata into audit, bounds all captured streams/events,
+and never automatically retries an ambiguous call. `unrestricted` deliberately
+adds `--dangerously-skip-permissions` for Claude or
+`--dangerously-bypass-approvals-and-sandbox` for Codex. Blanket environment
+inheritance is also restricted to this mode. Both require the complete audited
+override bundle (or `unsafe_all`) and run with the user's OS authority. Provider
+sandbox flags and direct-child cancellation are not an OS process-tree,
+filesystem, network or credential-containment claim. Native commands, edits,
+MCP calls and web activity are control-plane audit only: they cannot become a
+target receipt, finding proof, confirmation, model-panel evidence, or chain fact.
 
 Explicit finding acceptance yields `OperatorAccepted`, not `Confirmed`. Missing,
 foreign or rejected evidence cannot be accepted. Default CI excludes this state;

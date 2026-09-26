@@ -35,7 +35,7 @@ A capability is complete only when all applicable gates pass:
 | E05 | P0 | Host, Windows and Active Directory | Protocol-aware discovery, credentialed SSH/WinRM/SMB/LDAP inspection, AD relationships and safe replay | Planned |
 | E06 | P0 | AI, MCP and workflow assessment | Multi-turn scenario runner, attacker/judge separation, canaries, tool/RAG/MCP surfaces and reproducible verdicts | Planned |
 | E07 | P0 | Attack-chain breadth | Verified primitive registry, evidence-backed dynamic DAGs, loot propagation, typed adapters and cleanup | Planned |
-| E08 | P1 | Provider and swarm platform | Subscription CLIs, provider breadth, streaming, reasoning controls, native cost telemetry, routing and durable workers | Planned |
+| E08 | P1 | Provider and swarm platform | Subscription CLIs, provider breadth, streaming, reasoning controls, native cost telemetry, routing and durable workers | In progress: E08-S01 adds audited Claude/Codex subscription transports and explicit autonomous modes; Gemini/Grok, streaming, durable workers and broader telemetry remain |
 | E09 | P1 | SDLC integrations | Remote PR/MR fetch, private clone, reviews, status gates, branch watch, Jira issues and mention automation | Planned |
 | E10 | P1 | Operator experience and reports | Natural-language REPL, production TUI, project memory, proxies, targeted retest, PDF/Typst and evidence bundles | Planned |
 | E11 | P2 | Runtime and data hardening | OS sandbox, managed keys, evidence retention/deletion, stable configuration migrations and distributed execution | Planned |

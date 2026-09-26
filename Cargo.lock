@@ -1293,12 +1293,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "metisblack-provider-cli-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "metisblack-domain",
+ "metisblack-storage",
+ "ring",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+]
+
+[[package]]
 name = "metisblack-providers"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "futures",
  "metisblack-domain",
+ "metisblack-provider-cli-runtime",
  "metisblack-storage",
  "reqwest",
  "serde",

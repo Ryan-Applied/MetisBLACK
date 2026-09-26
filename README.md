@@ -145,6 +145,54 @@ provider cost telemetry remain unavailable. Local HTTP provider endpoints are
 accepted only on loopback by default. See the
 [live runtime workflow guide](docs/live-runtime-workflows.md).
 
+### Use an authenticated subscription CLI
+
+Installed Claude Code and Codex CLIs can use their existing subscription login
+without an API key. Select the typed adapter and explicitly expose only the login
+profile variables it needs:
+
+```bash
+cargo run --locked -p metisblack-app -- \
+  run https://app.example.test --authorize \
+  --provider openai --model '<codex-model-id>' \
+  --subscription-cli codex --subscription-autonomy read-only \
+  --subscription-profile-env HOME,PATH,USER,LOGNAME,CODEX_HOME \
+  --override tool-capabilities,sandbox,network,secret-exposure \
+  --override-actor "$USER" \
+  --override-reason "authorized local subscription CLI assessment" \
+  --acknowledge-unsafe --output ./runs/codex-subscription
+```
+
+For fully autonomous native tooling, select `unrestricted` and acknowledge the
+expanded override bundle, or deliberately use `--unsafe-all`. MetisBLACK then
+adds the provider's exact bypass flag itself; arbitrary argv is not accepted:
+
+```bash
+cargo run --locked -p metisblack-app -- \
+  run https://lab.example.test --authorize \
+  --provider anthropic --model '<claude-model-id>' \
+  --subscription-cli claude --subscription-autonomy unrestricted \
+  --subscription-profile-env HOME,PATH,USER,LOGNAME,CLAUDE_CONFIG_DIR \
+  --override tool-capabilities,sandbox,network,secret-exposure,filesystem-roots,state-changes,environment,command-risk,package-installation,external-downloads,destructive-actions,privilege-changes \
+  --override-actor "$USER" \
+  --override-reason "isolated authorized lab requires autonomous Claude tooling" \
+  --acknowledge-unsafe --output ./runs/claude-unrestricted
+```
+
+In this mode Claude receives `--dangerously-skip-permissions`; Codex receives
+`--dangerously-bypass-approvals-and-sandbox`. Safer modes receive neither. Add
+`--subscription-inherit-environment` only when unrestricted execution truly
+needs the ambient environment; provider API-key variables remain excluded.
+Claude starts in safe mode by default, disabling its native customizations.
+Codex ignores user config and exec-policy rules by default, but its CLI may still
+discover project instructions such as `AGENTS.md`; MetisBLACK does not claim
+complete Codex customization isolation. Unrestricted runs may opt back into the
+supported native customization sources with
+`--subscription-load-native-customizations`. Native actions remain
+lower-assurance control-plane audit and cannot replace MetisBLACK receipts or
+confirmation. Codex `inference-only` fails closed because the installed CLI does
+not expose a verified no-tools mode; use `read-only` for sandboxed native reads.
+
 ## Commands
 
 The application exposes black-box (`run`), WebDriver (`browser`), `whitebox`,
@@ -246,7 +294,8 @@ Depending on the mode, a run directory can contain:
   records and primary/replay intents, plus standalone `api-retest-intents/`
 - durable discovery, open-redirect and API operation intents, including explicit
   indeterminate/no-repeat and failed-stage retry provenance
-- provider-step records and account-cleanup state
+- provider-step records, durable subscription-CLI invocation intents and
+  control-plane receipts, and account-cleanup state
 - `browser-plan-result.json` or `browser-authenticated-workflow-result.json`, private browser artifacts, and common browser receipts
 - `cloud-live-result.json`, `cloud-iam-graph.json`, verified identity/command audits, and common cloud receipts
 - `model-panel.json` with consensus, dissent, failures, and per-member budgets

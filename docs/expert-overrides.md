@@ -85,11 +85,11 @@ CLI values accept hyphens; JSON uses the snake-case names shown below.
 | `data_sampling` | Caps file, context, provider, subprocess, and HTTP response sizes and source line ranges | Removes those byte/range caps; memory, provider, filesystem, and protocol limits still exist |
 | `sandbox` | Refuses arbitrary subprocess execution because no OS sandbox is present | Required to expose the unsandboxed shell path; it does not create a sandbox |
 | `network` | Enforces network scope and secure provider/integration endpoint rules | Bypasses network destination checks and permits non-HTTPS provider or publication endpoints; also required for expert shell because a child process can perform its own networking |
-| `environment` | Clears child environment and supplies a minimal system `PATH` | Lets an expert subprocess inherit the full MetisBLACK environment, including any available secrets |
+| `environment` | Clears child environment; subscription CLIs receive only fixed values plus explicitly named profile variables | Lets an expert subprocess inherit the full MetisBLACK environment. For a subscription CLI, blanket inheritance additionally requires `unrestricted` autonomy and is fully named in the invocation audit |
 | `secret_redaction` | Recursively redacts known and pattern-matched secrets from evidence and reports | Stores raw captured values where the tool exposes them, including `Set-Cookie`; this can permanently disclose credentials in run artifacts |
 | `secret_exposure` | Blocks secret-bearing URL fields/queries, secret paths, credential commands, and credential-bearing provider/integration endpoints | Allows those sources and fields. This is distinct from redaction: exposed material may still be redacted unless `secret_redaction` is also disabled |
-| `provider_capabilities` | Accepts only the known provider kinds | Treats an unknown kind as OpenAI-compatible. It does not implement a subscription CLI or arbitrary provider protocol |
-| `tool_capabilities` | Exposes only the standard typed methods and tools | Adds the expert `shell` tool to provider definitions, permits otherwise unsupported HTTP methods, and is a shell prerequisite |
+| `provider_capabilities` | Accepts only known HTTP provider kinds and the typed Claude/Codex subscription adapters | Treats an unknown HTTP kind as OpenAI-compatible. It does not create an arbitrary subscription command, argv template, or provider protocol |
+| `tool_capabilities` | Exposes only the standard typed methods and tools | Adds the expert `shell` tool, permits otherwise unsupported HTTP methods, and acknowledges that a native subscription CLI may use provider-owned tools outside the harness |
 | `confirmation` | Requires supported independent replay for empirical confirmation | Permits the explicit `accept` command for one eligible finding. The result is `operator_accepted`, never empirical `confirmed` |
 | `timeouts` | Applies DNS, TCP connect/banner, HTTP connect/request, provider, publication, and whole-tool timeouts | Omits those application timeouts; cancellation, OS/network behavior, remote infrastructure, and upstream libraries can still stop an operation |
 
@@ -174,6 +174,49 @@ unbounded until another resource limit intervenes.
 Command classification is a guardrail, not a shell parser or security boundary.
 Wrappers, interpreters, scripts, aliases, and program behavior can defeat
 name-based classification. Use an OS/container/VM boundary for hostile commands.
+
+### Autonomous subscription CLIs
+
+All Claude/Codex subscription modes acknowledge that a provider-owned process can
+perform activity outside the typed harness. The baseline bundle is:
+
+```text
+tool_capabilities + sandbox + network + secret_exposure
+```
+
+`workspace_write` additionally requires `filesystem_roots + state_changes`.
+`unrestricted` additionally requires:
+
+```text
+filesystem_roots + state_changes + environment + command_risk +
+package_installation + external_downloads + destructive_actions + privilege_changes
+```
+
+`unsafe_all` satisfies these application gates as the deliberate aggregate
+bypass. The runtime, not user-supplied argv, adds
+`--dangerously-skip-permissions` for Claude or
+`--dangerously-bypass-approvals-and-sandbox` for Codex. Neither flag appears in
+`inference_only`, `read_only`, or `workspace_write`. Blanket ambient environment
+inheritance requires both `unrestricted` and its environment/secret controls;
+provider API-key variables remain excluded so the subscription path cannot
+silently switch authentication or billing. Otherwise use named `HOME`, `PATH`,
+`USER`, `LOGNAME`, XDG, proxy/certificate, or provider-profile variables. Claude
+safe mode disables its native customization surface by default. Codex ignores
+user config and exec-policy rules, but project-instruction discovery such as
+`AGENTS.md` remains CLI-owned and is not claimed isolated.
+`--subscription-load-native-customizations` is an unrestricted-only bypass that
+restores the customization sources controlled by the supported CLI flags and
+records that lower-determinism choice in the invocation. Codex `inference_only`
+fails closed until an installed version exposes a verified no-tools mode;
+`read_only` still permits provider-native reads.
+
+These overrides do not create containment. Native commands, edits, downloads,
+web requests, MCP calls, and subprocesses run with the operator's OS authority.
+MetisBLACK records bounded event summaries, executable/version/hash, argv,
+environment names, output hashes, telemetry, overrides, and a durable pre-spawn
+intent. A pending post-spawn intent without an exact sealed receipt becomes
+indeterminate and is not retried. These control-plane receipts are excluded from
+target evidence, panel citation, confirmation, and attack-chain derivation.
 
 ### Secret access and persistence
 

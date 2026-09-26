@@ -52,6 +52,7 @@ async fn admitted(control: Control, mut overrides: ExpertOverrides) -> Result<bo
                 key_env: None,
                 timeout_seconds: 1,
                 max_output_tokens: 1,
+                subscription_cli: None,
             },
             overrides,
         )
@@ -155,6 +156,7 @@ async fn admitted(control: Control, mut overrides: ExpertOverrides) -> Result<bo
                 key_env: None,
                 timeout_seconds: 1,
                 max_output_tokens: 1,
+                subscription_cli: None,
             },
             overrides,
         )

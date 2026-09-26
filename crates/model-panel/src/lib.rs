@@ -6,7 +6,7 @@
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use domain::{now_ms, Candidate};
 use futures::{stream, StreamExt};
-use providers::{Message, Provider, ToolDefinition};
+use providers::{Capabilities, Message, Provider, ToolDefinition};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -86,8 +86,15 @@ impl Default for ProviderBudget {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PanelInvocation {
     pub run_id: String,
+    /// Stable identifier for one resumable panel execution within the run.
+    pub session_id: String,
+    /// Configured member identifier. This is part of the durable provider-call
+    /// binding and must not be inferred only from provider identity.
+    pub member_id: String,
     pub fresh_context_id: String,
     pub role: PanelRole,
+    /// One-based provider attempt within this role stage.
+    pub round: u8,
     pub prompt: String,
     pub candidates: Vec<CandidateEnvelope>,
     pub allowed_receipt_ids: BTreeSet<String>,
@@ -198,6 +205,7 @@ impl Default for PanelConfig {
 #[derive(Debug, Clone)]
 pub struct PanelRequest {
     pub run_id: String,
+    pub session_id: String,
     pub prompt: String,
     pub allowed_receipt_ids: BTreeSet<String>,
     pub cancelled: Arc<AtomicBool>,
@@ -361,6 +369,10 @@ impl ModelPanel {
 
     pub async fn run(&self, request: PanelRequest) -> Result<PanelReport> {
         ensure!(!request.run_id.trim().is_empty(), "run id required");
+        ensure!(
+            !request.session_id.trim().is_empty(),
+            "panel session id required"
+        );
         ensure!(!request.prompt.trim().is_empty(), "panel prompt required");
         ensure!(!request.cancelled.load(Ordering::SeqCst), "panel cancelled");
 
@@ -446,10 +458,11 @@ impl ModelPanel {
             let mut opposes = vec![];
             let mut dissent = vec![];
             let mut assurance = BTreeMap::new();
+            for call in &supports {
+                merge_call_assurance(&mut assurance, call);
+            }
             for call in opinions.remove(&candidate.id).unwrap_or_default() {
-                for (key, value) in &call.reply.assurance {
-                    assurance.insert(format!("{}:{key}", call.member_id), value.clone());
-                }
+                merge_call_assurance(&mut assurance, &call);
                 match &call.reply.submission {
                     PanelSubmission::Review { review } => match review.verdict {
                         ReviewVerdict::Support => supports.push(call),
@@ -660,8 +673,11 @@ impl ModelPanel {
             );
             let invocation = PanelInvocation {
                 run_id: request.run_id.clone(),
+                session_id: request.session_id.clone(),
+                member_id: member.id.clone(),
                 fresh_context_id: fresh_context_id.clone(),
                 role: member.role,
+                round: attempt,
                 prompt: request.prompt.clone(),
                 candidates: candidates.to_vec(),
                 allowed_receipt_ids: request.allowed_receipt_ids.clone(),
@@ -898,6 +914,30 @@ fn dissent_review(call: &SuccessfulCall, rationale: &str, receipts: &[String]) -
     }
 }
 
+fn merge_call_assurance(assurance: &mut BTreeMap<String, String>, call: &SuccessfulCall) {
+    for (key, value) in &call.reply.assurance {
+        assurance.insert(format!("{}:{key}", call.member_id), value.clone());
+    }
+}
+
+/// Fully materialized provider call produced by the panel. An orchestrator can
+/// supply a [`NativeProviderExecutor`] to durably journal this exact call
+/// before the provider process is spawned, while keeping submission decoding
+/// and evidence validation inside the panel.
+pub struct NativeProviderCall {
+    pub provider: Provider,
+    pub invocation: PanelInvocation,
+    pub messages: Vec<Message>,
+    pub tools: Vec<ToolDefinition>,
+}
+
+pub type NativeProviderFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<providers::Reply>> + Send + 'a>>;
+
+pub trait NativeProviderExecutor: Send + Sync {
+    fn invoke(&self, call: NativeProviderCall) -> NativeProviderFuture<'_>;
+}
+
 /// Adapter for the native provider crate. Each invocation clones the configured
 /// provider and sends exactly one new user message; no prior model conversation
 /// is reused.
@@ -905,10 +945,33 @@ fn dissent_review(call: &SuccessfulCall, rationale: &str, receipts: &[String]) -
 pub struct NativeProviderBackend {
     provider: Provider,
     identity: ProviderIdentity,
+    capabilities: Capabilities,
+    executor: Option<Arc<dyn NativeProviderExecutor>>,
 }
 impl NativeProviderBackend {
     pub fn new(provider: Provider, deployment: impl Into<String>) -> Result<Self> {
+        Self::with_optional_executor(provider, deployment, None)
+    }
+
+    pub fn with_executor(
+        provider: Provider,
+        deployment: impl Into<String>,
+        executor: Arc<dyn NativeProviderExecutor>,
+    ) -> Result<Self> {
+        Self::with_optional_executor(provider, deployment, Some(executor))
+    }
+
+    fn with_optional_executor(
+        provider: Provider,
+        deployment: impl Into<String>,
+        executor: Option<Arc<dyn NativeProviderExecutor>>,
+    ) -> Result<Self> {
         let raw = provider.identity();
+        let capabilities = provider.capabilities();
+        ensure!(
+            capabilities.transport != "subscription_cli" || executor.is_some(),
+            "subscription CLI panel backends require a durable provider executor"
+        );
         let (kind, model) = raw
             .split_once(':')
             .context("native provider identity missing separator")?;
@@ -919,7 +982,21 @@ impl NativeProviderBackend {
                 model: model.into(),
                 deployment: deployment.into(),
             },
+            capabilities,
+            executor,
         })
+    }
+
+    /// Subscription CLI calls can consume quota or leave autonomous native
+    /// state before their outcome is known. They are therefore never retried
+    /// automatically. HTTP behavior retains the caller's configured retry
+    /// budget.
+    pub fn max_retries(&self, configured: u8) -> u8 {
+        if self.capabilities.transport == "subscription_cli" {
+            0
+        } else {
+            configured
+        }
     }
 }
 impl ModelBackend for NativeProviderBackend {
@@ -934,10 +1011,20 @@ impl ModelBackend for NativeProviderBackend {
             let mut provider = self.provider.clone();
             let tools = panel_definitions(invocation.role);
             let prompt = serde_json::to_string(&invocation)?;
-            let reply = provider
-                .complete(&[Message::User(prompt)], &tools)
-                .await
-                .context("native provider panel invocation failed")?;
+            let messages = vec![Message::User(prompt)];
+            let reply = if let Some(executor) = &self.executor {
+                executor
+                    .invoke(NativeProviderCall {
+                        provider,
+                        invocation: invocation.clone(),
+                        messages,
+                        tools,
+                    })
+                    .await
+            } else {
+                provider.complete(&messages, &tools).await
+            }
+            .context("native provider panel invocation failed")?;
             ensure!(
                 reply.calls.len() == 1,
                 "provider must submit exactly one panel result"
@@ -948,18 +1035,59 @@ impl ModelBackend for NativeProviderBackend {
                 "unexpected panel tool call"
             );
             let submission = decode_native_submission(invocation.role, call.arguments.clone())?;
+            let cost_microusd = reply
+                .transport_audit
+                .as_ref()
+                .and_then(|audit| audit.get("cost_microusd"))
+                .and_then(Value::as_u64);
+            let assurance =
+                native_provider_assurance(&self.capabilities, reply.transport_audit.as_ref())?;
             Ok(BackendReply {
                 submission,
                 input_tokens: reply.input_tokens,
                 output_tokens: reply.output_tokens,
-                cost_microusd: None,
-                assurance: BTreeMap::from([(
-                    "native_tool_call".into(),
-                    "structured-submit_panel_result".into(),
-                )]),
+                cost_microusd,
+                assurance,
             })
         })
     }
+}
+
+fn native_provider_assurance(
+    capabilities: &Capabilities,
+    transport_audit: Option<&Value>,
+) -> Result<BTreeMap<String, String>> {
+    let mut assurance = BTreeMap::from([
+        (
+            "native_tool_call".into(),
+            "structured-submit_panel_result".into(),
+        ),
+        ("provider_transport".into(), capabilities.transport.clone()),
+        (
+            "provider_capability_assurance".into(),
+            capabilities.assurance.clone(),
+        ),
+        (
+            "provider_cancellation_scope".into(),
+            capabilities.cancellation_scope.clone(),
+        ),
+    ]);
+    if let Some(mode) = &capabilities.autonomous_mode {
+        assurance.insert("provider_autonomous_mode".into(), mode.clone());
+    }
+    if let Some(audit) = transport_audit {
+        let serialized = serde_json::to_vec(audit)?;
+        assurance.insert(
+            "transport_audit".into(),
+            String::from_utf8(serialized.clone()).context("transport audit is not UTF-8")?,
+        );
+        assurance.insert("transport_audit_sha256".into(), hash(&serialized));
+        assurance.insert(
+            "transport_audit_evidentiary_use".into(),
+            "control_plane_metadata_only_not_target_evidence".into(),
+        );
+    }
+    Ok(assurance)
 }
 
 fn panel_definitions(role: PanelRole) -> Vec<ToolDefinition> {
@@ -1057,7 +1185,10 @@ impl ModelBackend for MockBackend {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use domain::{Proof, Severity};
+    use domain::{
+        Control, ExpertOverrides, Proof, ProviderConfig, Severity, SubscriptionCliAutonomy,
+        SubscriptionCliConfig, SubscriptionCliKind,
+    };
 
     fn candidate(receipt: &str) -> Candidate {
         Candidate {
@@ -1099,15 +1230,64 @@ mod tests {
         }
     }
     fn backend(provider: &str, model: &str, submission: PanelSubmission) -> Arc<dyn ModelBackend> {
+        backend_with_assurance(provider, model, "test", submission, BTreeMap::new())
+    }
+    fn backend_with_assurance(
+        provider: &str,
+        model: &str,
+        deployment: &str,
+        submission: PanelSubmission,
+        assurance: BTreeMap<String, String>,
+    ) -> Arc<dyn ModelBackend> {
         Arc::new(MockBackend::new(
             ProviderIdentity {
                 provider: provider.into(),
                 model: model.into(),
-                deployment: "test".into(),
+                deployment: deployment.into(),
             },
-            vec![MockOutcome::Reply(reply(submission))],
+            vec![MockOutcome::Reply(BackendReply {
+                assurance,
+                ..reply(submission)
+            })],
         ))
     }
+
+    #[derive(Clone, Default)]
+    struct RecordingNativeExecutor {
+        invocations: Arc<Mutex<Vec<PanelInvocation>>>,
+    }
+
+    impl NativeProviderExecutor for RecordingNativeExecutor {
+        fn invoke(&self, call: NativeProviderCall) -> NativeProviderFuture<'_> {
+            let invocations = self.invocations.clone();
+            Box::pin(async move {
+                ensure!(call.messages.len() == 1, "panel call must be standalone");
+                ensure!(
+                    call.tools.len() == 1 && call.tools[0].name == "submit_panel_result",
+                    "panel call must expose only its structured submission tool"
+                );
+                invocations
+                    .lock()
+                    .expect("recording executor mutex")
+                    .push(call.invocation);
+                Ok(providers::Reply {
+                    calls: vec![providers::ToolCall {
+                        id: "executor-panel-1".into(),
+                        name: "submit_panel_result".into(),
+                        arguments: json!({"candidate":candidate("receipt-1")}),
+                    }],
+                    text: String::new(),
+                    input_tokens: Some(1),
+                    output_tokens: Some(1),
+                    provider: "mock".into(),
+                    model: "deterministic-fixture".into(),
+                    native_content: None,
+                    transport_audit: None,
+                })
+            })
+        }
+    }
+
     fn member(id: &str, role: PanelRole, backend: Arc<dyn ModelBackend>) -> PanelMember {
         PanelMember {
             id: id.into(),
@@ -1117,9 +1297,46 @@ mod tests {
             backend,
         }
     }
+
+    #[tokio::test]
+    async fn native_executor_receives_run_session_member_role_and_round_binding() -> Result<()> {
+        let executor = Arc::new(RecordingNativeExecutor::default());
+        let provider = Provider::mock(vec![])?;
+        let backend = NativeProviderBackend::with_executor(
+            provider,
+            "durable-executor-fixture",
+            executor.clone(),
+        )?;
+        let reply = backend
+            .invoke(PanelInvocation {
+                run_id: "run-durable-panel".into(),
+                session_id: "run-durable-panel:model-panel".into(),
+                member_id: "candidate-openai".into(),
+                fresh_context_id: "run-durable-panel-candidate-openai-candidate-1".into(),
+                role: PanelRole::Candidate,
+                round: 1,
+                prompt: "validate".into(),
+                candidates: vec![],
+                allowed_receipt_ids: BTreeSet::from(["receipt-1".into()]),
+            })
+            .await?;
+        assert!(matches!(
+            reply.submission,
+            PanelSubmission::Candidate { .. }
+        ));
+        let invocations = executor.invocations.lock().expect("recorded invocations");
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].run_id, "run-durable-panel");
+        assert_eq!(invocations[0].session_id, "run-durable-panel:model-panel");
+        assert_eq!(invocations[0].member_id, "candidate-openai");
+        assert_eq!(invocations[0].role, PanelRole::Candidate);
+        assert_eq!(invocations[0].round, 1);
+        Ok(())
+    }
     fn request() -> PanelRequest {
         PanelRequest {
             run_id: "test-run".into(),
+            session_id: "test-run:model-panel".into(),
             prompt: "validate".into(),
             allowed_receipt_ids: BTreeSet::from(["receipt-1".into()]),
             cancelled: Arc::new(AtomicBool::new(false)),
@@ -1258,6 +1475,174 @@ mod tests {
             report.consensus[0].assurance["distinct_supporting_providers"],
             "1"
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_and_subscription_cli_from_same_vendor_share_one_trust_domain() -> Result<()> {
+        let c = candidate("receipt-1");
+        let id = candidate_fingerprint(&c)?;
+        let panel = ModelPanel::new(
+            PanelConfig::default(),
+            vec![
+                member(
+                    "openai-api",
+                    PanelRole::Candidate,
+                    backend_with_assurance(
+                        "openai",
+                        "model-api",
+                        "api",
+                        candidate_submission(c),
+                        BTreeMap::from([("provider_transport".into(), "http".into())]),
+                    ),
+                ),
+                member(
+                    "openai-cli",
+                    PanelRole::Reviewer,
+                    backend_with_assurance(
+                        "openai",
+                        "model-cli",
+                        "subscription-cli",
+                        PanelSubmission::Review {
+                            review: Review {
+                                candidate_id: id.clone(),
+                                verdict: ReviewVerdict::Support,
+                                rationale: "same vendor transport agrees".into(),
+                                receipt_ids: vec!["receipt-1".into()],
+                                confidence: 0.9,
+                            },
+                        },
+                        BTreeMap::from([("provider_transport".into(), "subscription_cli".into())]),
+                    ),
+                ),
+                member(
+                    "anthropic-refuter",
+                    PanelRole::Refuter,
+                    backend(
+                        "anthropic",
+                        "model-refuter",
+                        PanelSubmission::Refutation {
+                            refutation: Refutation {
+                                candidate_id: id,
+                                verdict: RefutationVerdict::Sustained,
+                                rationale: "independent vendor dissents".into(),
+                                receipt_ids: vec![],
+                                confidence: 0.8,
+                            },
+                        },
+                    ),
+                ),
+            ],
+        )?;
+        let report = panel.run(request()).await?;
+        let consensus = &report.consensus[0];
+        assert_eq!(consensus.verdict, ConsensusVerdict::NoQuorum);
+        assert_eq!(consensus.assurance["distinct_supporting_providers"], "1");
+        assert_eq!(consensus.assurance["openai-api:provider_transport"], "http");
+        assert_eq!(
+            consensus.assurance["openai-cli:provider_transport"],
+            "subscription_cli"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn native_backend_preserves_transport_audit_as_non_evidence_assurance() -> Result<()> {
+        let audit = json!({
+            "autonomous_events":[{
+                "kind":"tool_call",
+                "receipt_id":"fabricated-native-event"
+            }],
+            "cost_microusd":37,
+            "evidentiary_use":"hypothesis_only",
+            "invocation":{"stdout_sha256":"abc123"}
+        });
+        let provider = Provider::mock(vec![providers::Reply {
+            calls: vec![providers::ToolCall {
+                id: "panel-1".into(),
+                name: "submit_panel_result".into(),
+                arguments: json!({"candidate":candidate("receipt-1")}),
+            }],
+            text: String::new(),
+            input_tokens: Some(11),
+            output_tokens: Some(12),
+            provider: "mock".into(),
+            model: "deterministic-fixture".into(),
+            native_content: None,
+            transport_audit: Some(audit.clone()),
+        }])?;
+        let backend = NativeProviderBackend::new(provider, "fixture")?;
+        let reply = backend
+            .invoke(PanelInvocation {
+                run_id: "native-audit".into(),
+                session_id: "native-audit:model-panel".into(),
+                member_id: "candidate-mock".into(),
+                fresh_context_id: "native-audit-1".into(),
+                role: PanelRole::Candidate,
+                round: 1,
+                prompt: "validate".into(),
+                candidates: vec![],
+                allowed_receipt_ids: BTreeSet::from(["receipt-1".into()]),
+            })
+            .await?;
+        assert_eq!(reply.cost_microusd, Some(37));
+        assert_eq!(
+            reply.assurance["transport_audit_evidentiary_use"],
+            "control_plane_metadata_only_not_target_evidence"
+        );
+        assert_eq!(
+            reply.assurance["transport_audit_sha256"],
+            hash(&serde_json::to_vec(&audit)?)
+        );
+        let PanelSubmission::Candidate { candidate } = reply.submission else {
+            bail!("expected candidate submission")
+        };
+        assert_eq!(candidate.receipt_ids, vec!["receipt-1"]);
+        assert!(!candidate
+            .receipt_ids
+            .iter()
+            .any(|id| id == "fabricated-native-event"));
+        Ok(())
+    }
+
+    #[test]
+    fn subscription_cli_backend_disables_automatic_retries_only_for_that_transport() -> Result<()> {
+        let http = NativeProviderBackend::new(Provider::mock(vec![])?, "fixture")?;
+        assert_eq!(http.max_retries(2), 2);
+
+        let mut subscription = SubscriptionCliConfig::new(SubscriptionCliKind::Codex);
+        subscription.autonomy = SubscriptionCliAutonomy::ReadOnly;
+        subscription.executable = Some(std::env::current_exe()?);
+        let provider = Provider::with_overrides(
+            ProviderConfig {
+                kind: "openai".into(),
+                model: "fixture-model".into(),
+                endpoint: "local://subscription".into(),
+                key_env: None,
+                timeout_seconds: 2,
+                max_output_tokens: 256,
+                subscription_cli: Some(subscription),
+            },
+            ExpertOverrides {
+                controls: vec![
+                    Control::ToolCapabilities,
+                    Control::Sandbox,
+                    Control::Network,
+                    Control::SecretExposure,
+                ],
+                reason: "Authorized subscription CLI panel unit fixture".into(),
+                actor: "model-panel-test".into(),
+                acknowledged: true,
+                ..Default::default()
+            },
+        )?;
+        assert!(NativeProviderBackend::new(provider.clone(), "fixture").is_err());
+        let cli = NativeProviderBackend::with_executor(
+            provider,
+            "fixture",
+            Arc::new(RecordingNativeExecutor::default()),
+        )?;
+        assert_eq!(cli.max_retries(2), 0);
         Ok(())
     }
 

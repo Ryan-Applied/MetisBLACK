@@ -1,0 +1,74 @@
+{
+  "quorum": 2,
+  "acceptance_ratio_millis": 600,
+  "members": [
+    {
+      "id": "candidate-claude-subscription",
+      "role": "candidate",
+      "deployment": "local-claude-profile",
+      "provider": {
+        "kind": "anthropic",
+        "model": "CLAUDE_MODEL_ID",
+        "endpoint": "local://subscription",
+        "key_env": null,
+        "timeout_seconds": 60,
+        "max_output_tokens": 4096,
+        "subscription_cli": {
+          "schema_version": 1,
+          "kind": "claude",
+          "autonomy": "inference_only",
+          "executable": null,
+          "working_directory": null,
+          "max_stdout_bytes": 4194304,
+          "max_stderr_bytes": 1048576,
+          "max_events": 10000,
+          "max_turns": 16,
+          "profile_environment": ["HOME", "PATH", "USER", "LOGNAME", "USERPROFILE", "XDG_CONFIG_HOME"],
+          "inherit_environment": false,
+          "load_native_customizations": false
+        }
+      },
+      "max_input_tokens": 32000,
+      "max_output_tokens": 4096,
+      "max_cost_microusd": 250000,
+      "input_cost_microusd_per_million_tokens": 1,
+      "output_cost_microusd_per_million_tokens": 1,
+      "timeout_seconds": 60,
+      "weight_millis": 1000
+    },
+    {
+      "id": "review-codex-subscription",
+      "role": "reviewer",
+      "deployment": "local-codex-profile",
+      "provider": {
+        "kind": "openai",
+        "model": "CODEX_MODEL_ID",
+        "endpoint": "local://subscription",
+        "key_env": null,
+        "timeout_seconds": 60,
+        "max_output_tokens": 4096,
+        "subscription_cli": {
+          "schema_version": 1,
+          "kind": "codex",
+          "autonomy": "read_only",
+          "executable": null,
+          "working_directory": null,
+          "max_stdout_bytes": 4194304,
+          "max_stderr_bytes": 1048576,
+          "max_events": 10000,
+          "max_turns": 16,
+          "profile_environment": ["HOME", "PATH", "USER", "LOGNAME", "USERPROFILE", "XDG_CONFIG_HOME", "CODEX_HOME"],
+          "inherit_environment": false,
+          "load_native_customizations": false
+        }
+      },
+      "max_input_tokens": 32000,
+      "max_output_tokens": 4096,
+      "max_cost_microusd": 250000,
+      "input_cost_microusd_per_million_tokens": 1,
+      "output_cost_microusd_per_million_tokens": 1,
+      "timeout_seconds": 60,
+      "weight_millis": 1000
+    }
+  ]
+}

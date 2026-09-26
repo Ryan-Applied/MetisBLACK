@@ -1268,12 +1268,24 @@ impl Engine {
             .context("model panel configuration missing")?;
         let authorized =
             self.snapshot.config.authorized || self.runtime.policy.bypasses(Control::Authorization);
+        let panel_session_id = format!("{}:model-panel", self.snapshot.id);
+        let provider_executor: Arc<dyn model_panel::NativeProviderExecutor> =
+            Arc::new(DurablePanelProviderExecutor {
+                runtime: self.runtime.clone(),
+                output: self.snapshot.config.output_dir.clone(),
+                overrides: self.snapshot.config.overrides.clone(),
+            });
         let mut members = Vec::with_capacity(config.members.len());
         for member in config.members {
             let mut provider =
                 Provider::with_overrides(member.provider, self.snapshot.config.overrides.clone())?;
             provider.authorize(authorized);
-            let backend = model_panel::NativeProviderBackend::new(provider, member.deployment)?;
+            let backend = model_panel::NativeProviderBackend::with_executor(
+                provider,
+                member.deployment,
+                provider_executor.clone(),
+            )?;
+            let max_retries = backend.max_retries(1);
             let role = match member.role {
                 PanelMemberRole::Candidate => model_panel::PanelRole::Candidate,
                 PanelMemberRole::Reviewer => model_panel::PanelRole::Reviewer,
@@ -1292,14 +1304,20 @@ impl Engine {
                     output_cost_microusd_per_million_tokens: member
                         .output_cost_microusd_per_million_tokens,
                     timeout_ms: member.timeout_seconds.saturating_mul(1_000),
-                    max_retries: 1,
+                    max_retries,
                     weight_millis: member.weight_millis,
                 },
                 calibration: None,
                 backend: Arc::new(backend),
             });
         }
-        let receipts = self.runtime.evidence.manifest()?;
+        let receipts = self
+            .runtime
+            .evidence
+            .manifest()?
+            .into_iter()
+            .filter(receipt_contributes_model_panel_evidence)
+            .collect::<Vec<_>>();
         let allowed_receipt_ids = receipts.iter().map(|r| r.id.clone()).collect();
         let mut context = json!({
             "instruction":"Propose, review, or refute only receipt-backed security candidates. A model vote is not empirical confirmation.",
@@ -1332,6 +1350,7 @@ impl Engine {
         let report = panel
             .run(model_panel::PanelRequest {
                 run_id: self.snapshot.id.clone(),
+                session_id: panel_session_id,
                 prompt: serde_json::to_string(&context)?,
                 allowed_receipt_ids,
                 cancelled: self.control.cancel.clone(),
@@ -3672,6 +3691,7 @@ impl Engine {
                             .evidence
                             .manifest()?
                             .into_iter()
+                            .filter(receipt_contributes_model_panel_evidence)
                             .rev()
                             .take(limit)
                             .collect::<Vec<_>>(),
@@ -3691,6 +3711,7 @@ impl Engine {
                     let book = book.clone();
                     let overrides = self.snapshot.config.overrides.clone();
                     let output = self.snapshot.config.output_dir.clone();
+                    let run_id = self.snapshot.id.clone();
                     tasks.spawn(run_specialist(
                         runtime,
                         provider,
@@ -3698,6 +3719,7 @@ impl Engine {
                         context,
                         steps,
                         SessionResources {
+                            run_id,
                             overrides,
                             output,
                             budget: budget.clone(),
@@ -3782,10 +3804,576 @@ struct ModelBudget {
     max_tokens: u64,
 }
 struct SessionResources {
+    run_id: String,
     overrides: ExpertOverrides,
     output: PathBuf,
     budget: Arc<tokio::sync::Mutex<ModelBudget>>,
 }
+
+const PROVIDER_INVOCATION_INTENT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum ProviderInvocationIntentState {
+    Pending,
+    Receipted,
+    Indeterminate,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderInvocationIntent {
+    schema_version: u32,
+    intent_key: String,
+    actor: String,
+    playbook: String,
+    step: usize,
+    descriptor_hash: String,
+    action: ToolAction,
+    state: ProviderInvocationIntentState,
+    receipt_id: Option<String>,
+}
+
+impl ProviderInvocationIntent {
+    fn pending(
+        intent_key: String,
+        actor: String,
+        playbook: String,
+        step: usize,
+        descriptor_hash: String,
+        action: ToolAction,
+    ) -> Self {
+        Self {
+            schema_version: PROVIDER_INVOCATION_INTENT_SCHEMA_VERSION,
+            intent_key,
+            actor,
+            playbook,
+            step,
+            descriptor_hash,
+            action,
+            state: ProviderInvocationIntentState::Pending,
+            receipt_id: None,
+        }
+    }
+
+    fn validate_identity(
+        &self,
+        intent_key: &str,
+        actor: &str,
+        playbook: &str,
+        step: usize,
+    ) -> Result<()> {
+        ensure!(
+            self.schema_version == PROVIDER_INVOCATION_INTENT_SCHEMA_VERSION
+                && self.intent_key == intent_key
+                && self.actor == actor
+                && self.playbook == playbook
+                && self.step == step,
+            "subscription CLI invocation intent does not match the logical provider step"
+        );
+        ensure!(
+            matches!(self.state, ProviderInvocationIntentState::Pending)
+                == self.receipt_id.is_none(),
+            "subscription CLI invocation intent state contradicts receipt lineage"
+        );
+        self.validate_integrity()?;
+        Ok(())
+    }
+
+    fn validate_integrity(&self) -> Result<()> {
+        let ToolAction::External {
+            subsystem,
+            operation,
+            parameters,
+            ..
+        } = &self.action
+        else {
+            anyhow::bail!("subscription CLI intent has a non-provider action")
+        };
+        ensure!(
+            subsystem == "provider" && operation == "subscription_cli_invocation",
+            "subscription CLI intent action has the wrong control-plane namespace"
+        );
+        let descriptor = parameters
+            .get("descriptor")
+            .context("subscription CLI intent action lacks its descriptor")?;
+        ensure!(
+            hash(&serde_json::to_vec(descriptor)?) == self.descriptor_hash
+                && parameters["descriptor_hash"] == self.descriptor_hash
+                && parameters["intent_key"] == self.intent_key
+                && parameters["evidentiary_use"] == "control_plane_only",
+            "subscription CLI intent action integrity check failed"
+        );
+        if let Some(binding) = parameters.get("invocation_binding") {
+            ensure!(
+                parameters["invocation_binding_sha256"] == hash(&serde_json::to_vec(binding)?),
+                "subscription CLI intent logical binding integrity check failed"
+            );
+        }
+        Ok(())
+    }
+}
+
+struct ProviderStepResult {
+    reply: Option<providers::Reply>,
+    receipt: Option<Receipt>,
+    limitation: Option<String>,
+}
+
+struct PreparedProviderInvocation {
+    descriptor_hash: String,
+    action: ToolAction,
+    prepared: providers::PreparedSubscriptionProviderInvocation,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn prepare_provider_invocation(
+    provider: &Provider,
+    messages: &[Message],
+    tools: &[providers::ToolDefinition],
+    intent_key: &str,
+    invocation_binding: &Value,
+    invocation_binding_hash: &str,
+) -> Result<PreparedProviderInvocation> {
+    let prepared = provider
+        .prepare_subscription_invocation(messages, tools)
+        .await?
+        .context("subscription CLI preparation returned no invocation")?;
+    let descriptor = prepared.descriptor().clone();
+    let descriptor_hash = hash(&serde_json::to_vec(&descriptor)?);
+    let parameters = json!({
+        "descriptor": descriptor,
+        "descriptor_hash": descriptor_hash,
+        "evidentiary_use": "control_plane_only",
+        "intent_key": intent_key,
+        "invocation_binding": invocation_binding,
+        "invocation_binding_sha256": invocation_binding_hash,
+    });
+    let action = ToolAction::External {
+        subsystem: "provider".into(),
+        operation: "subscription_cli_invocation".into(),
+        target: provider.identity(),
+        parameters,
+    };
+    Ok(PreparedProviderInvocation {
+        descriptor_hash,
+        action,
+        prepared,
+    })
+}
+
+fn provider_invocation_intent_identity(
+    actor: &str,
+    playbook: &str,
+    step: usize,
+    invocation_binding: &Value,
+) -> Result<(String, String)> {
+    let binding_hash = hash(&serde_json::to_vec(invocation_binding)?);
+    let intent_key = hash(format!("{actor}\0{playbook}\0{step}\0{binding_hash}").as_bytes());
+    Ok((intent_key, binding_hash))
+}
+
+#[derive(Clone)]
+struct DurablePanelProviderExecutor {
+    runtime: Runtime,
+    output: PathBuf,
+    overrides: ExpertOverrides,
+}
+
+fn provider_override_provenance(overrides: &ExpertOverrides) -> Result<(Value, String)> {
+    let provenance = json!({
+        "active": overrides.active(),
+        "acknowledged": overrides.acknowledged,
+        "actor": overrides.actor,
+        "reason": overrides.reason,
+        "timestamp_ms": overrides.timestamp_ms,
+        "unsafe_all": overrides.unsafe_all,
+        "disabled_controls": overrides.disabled_controls(),
+    });
+    let provenance_hash = hash(&serde_json::to_vec(&provenance)?);
+    Ok((provenance, provenance_hash))
+}
+
+fn panel_provider_invocation_binding(
+    invocation: &model_panel::PanelInvocation,
+    provider_identity: &str,
+    overrides: &ExpertOverrides,
+) -> Result<Value> {
+    let (override_provenance, override_provenance_sha256) =
+        provider_override_provenance(overrides)?;
+    Ok(json!({
+        "kind": "model_panel",
+        "run_id": invocation.run_id,
+        "session_id": invocation.session_id,
+        "member_id": invocation.member_id,
+        "role": invocation.role,
+        "round": invocation.round,
+        "fresh_context_id": invocation.fresh_context_id,
+        "provider_identity": provider_identity,
+        "override_provenance": override_provenance,
+        "override_provenance_sha256": override_provenance_sha256,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn specialist_provider_invocation_binding(
+    run_id: &str,
+    session_id: &str,
+    actor: &str,
+    playbook: &str,
+    step: usize,
+    provider_identity: &str,
+    overrides: &ExpertOverrides,
+) -> Result<Value> {
+    let (override_provenance, override_provenance_sha256) =
+        provider_override_provenance(overrides)?;
+    Ok(json!({
+        "kind": "specialist",
+        "run_id": run_id,
+        "session_id": session_id,
+        "actor": actor,
+        "playbook": playbook,
+        "step": step,
+        "provider_identity": provider_identity,
+        "override_provenance": override_provenance,
+        "override_provenance_sha256": override_provenance_sha256,
+    }))
+}
+
+impl model_panel::NativeProviderExecutor for DurablePanelProviderExecutor {
+    fn invoke(
+        &self,
+        call: model_panel::NativeProviderCall,
+    ) -> model_panel::NativeProviderFuture<'_> {
+        let runtime = self.runtime.clone();
+        let output = self.output.clone();
+        let overrides = self.overrides.clone();
+        Box::pin(async move {
+            let model_panel::NativeProviderCall {
+                mut provider,
+                invocation,
+                messages,
+                tools,
+            } = call;
+            let provider_identity = provider.identity();
+            let binding =
+                panel_provider_invocation_binding(&invocation, &provider_identity, &overrides)?;
+            let actor = format!("provider:model-panel:{}", invocation.member_id);
+            let outcome = invoke_provider_step(
+                &runtime,
+                &mut provider,
+                &messages,
+                &tools,
+                &format!("model-panel:{}", invocation.session_id),
+                usize::from(invocation.round),
+                &actor,
+                &output,
+                &overrides,
+                Some(&binding),
+            )
+            .await?;
+            outcome.reply.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{}",
+                    outcome.limitation.unwrap_or_else(|| {
+                        "subscription CLI panel invocation produced no reply".into()
+                    })
+                )
+            })
+        })
+    }
+}
+
+fn provider_step_from_receipt(receipt: Receipt) -> Result<ProviderStepResult> {
+    if receipt.output.data["outcome"] == "indeterminate" {
+        return Ok(ProviderStepResult {
+            reply: None,
+            limitation: Some(
+                receipt.output.data["error"]
+                    .as_str()
+                    .unwrap_or("subscription CLI invocation is indeterminate")
+                    .to_owned(),
+            ),
+            receipt: Some(receipt),
+        });
+    }
+    if !receipt.output.successful {
+        return Ok(ProviderStepResult {
+            reply: None,
+            limitation: Some(
+                receipt.output.data["error"]
+                    .as_str()
+                    .unwrap_or("subscription CLI invocation failed")
+                    .to_owned(),
+            ),
+            receipt: Some(receipt),
+        });
+    }
+    let reply = serde_json::from_value(
+        receipt
+            .output
+            .data
+            .get("reply")
+            .cloned()
+            .context("successful subscription CLI receipt lacks its normalized reply")?,
+    )
+    .context("subscription CLI receipt contains an invalid normalized reply")?;
+    Ok(ProviderStepResult {
+        reply: Some(reply),
+        receipt: Some(receipt),
+        limitation: None,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_provider_invocation_intent(
+    runtime: &Runtime,
+    intent_path: &Path,
+    intent_key: &str,
+    actor: &str,
+    playbook: &str,
+    step: usize,
+    invocation_binding: &Value,
+    overrides: &ExpertOverrides,
+) -> Result<ProviderStepResult> {
+    let mut intent: ProviderInvocationIntent = read_json(intent_path)?;
+    intent.validate_identity(intent_key, actor, playbook, step)?;
+    let ToolAction::External {
+        parameters: stored_parameters,
+        ..
+    } = &intent.action
+    else {
+        anyhow::bail!("subscription CLI intent has a non-provider action")
+    };
+    ensure!(
+        stored_parameters.get("invocation_binding") == Some(invocation_binding),
+        "subscription CLI invocation intent does not match the exact logical binding"
+    );
+    runtime.policy.check_action(&intent.action)?;
+    if let Some(receipt_id) = &intent.receipt_id {
+        let receipt = runtime.evidence.get(receipt_id)?;
+        ensure!(
+            receipt.actor == actor && receipt.output.action == intent.action,
+            "subscription CLI invocation intent does not bind its exact receipt"
+        );
+        return provider_step_from_receipt(receipt);
+    }
+
+    let matches = runtime
+        .evidence
+        .manifest()?
+        .into_iter()
+        .filter(|receipt| receipt.actor == actor && receipt.output.action == intent.action)
+        .collect::<Vec<_>>();
+    ensure!(
+        matches.len() <= 1,
+        "subscription CLI pending intent has ambiguous sealed receipts"
+    );
+    if let Some(receipt) = matches.into_iter().next() {
+        intent.state = if receipt.output.data["outcome"] == "indeterminate" {
+            ProviderInvocationIntentState::Indeterminate
+        } else {
+            ProviderInvocationIntentState::Receipted
+        };
+        intent.receipt_id = Some(receipt.id.clone());
+        write_json(intent_path, &intent)?;
+        return provider_step_from_receipt(receipt);
+    }
+
+    let receipt = runtime.evidence.capture_with_override(
+        actor,
+        ToolOutput {
+            action: intent.action.clone(),
+            successful: false,
+            data: json!({
+                "outcome":"indeterminate",
+                "error":"indeterminate_after_crash: a durable subscription CLI intent exists without a sealed receipt; the provider turn was not repeated",
+                "evidentiary_use":"control_plane_only"
+            }),
+            truncated: false,
+        },
+        overrides,
+    )?;
+    intent.state = ProviderInvocationIntentState::Indeterminate;
+    intent.receipt_id = Some(receipt.id.clone());
+    write_json(intent_path, &intent)?;
+    provider_step_from_receipt(receipt)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn invoke_provider_step(
+    runtime: &Runtime,
+    provider: &mut Provider,
+    messages: &[Message],
+    tools: &[providers::ToolDefinition],
+    playbook: &str,
+    step: usize,
+    actor: &str,
+    output: &Path,
+    overrides: &ExpertOverrides,
+    invocation_binding: Option<&Value>,
+) -> Result<ProviderStepResult> {
+    if provider.capabilities().transport != "subscription_cli" {
+        let response = tokio::select! {
+            response = provider.complete(messages, tools) => response,
+            _ = async {
+                loop {
+                    if runtime.cancelled.load(Ordering::SeqCst) { break; }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            } => {
+                return Ok(ProviderStepResult {
+                    reply: None,
+                    receipt: None,
+                    limitation: Some("Cancelled during provider call".into()),
+                });
+            }
+        };
+        return Ok(match response {
+            Ok(reply) => ProviderStepResult {
+                reply: Some(reply),
+                receipt: None,
+                limitation: None,
+            },
+            Err(error) => ProviderStepResult {
+                reply: None,
+                receipt: None,
+                limitation: Some(Redactor::with_override(overrides).text(&error.to_string())),
+            },
+        });
+    }
+
+    let invocation_binding = invocation_binding
+        .context("subscription CLI calls require a stable logical invocation binding")?;
+    let (intent_key, invocation_binding_hash) =
+        provider_invocation_intent_identity(actor, playbook, step, invocation_binding)?;
+    let intents_dir = output.join("provider-invocation-intents");
+    secure_dir(&intents_dir)?;
+    let intent_path = intents_dir.join(format!("intent-{intent_key}.json"));
+    if intent_path.exists() {
+        return recover_provider_invocation_intent(
+            runtime,
+            &intent_path,
+            &intent_key,
+            actor,
+            playbook,
+            step,
+            invocation_binding,
+            overrides,
+        );
+    }
+
+    let prepared = {
+        let preparation = prepare_provider_invocation(
+            provider,
+            messages,
+            tools,
+            &intent_key,
+            invocation_binding,
+            &invocation_binding_hash,
+        );
+        tokio::pin!(preparation);
+        tokio::select! {
+            prepared = &mut preparation => prepared?,
+            _ = async {
+                loop {
+                    if runtime.cancelled.load(Ordering::SeqCst) { break; }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+            } => {
+                return Ok(ProviderStepResult {
+                    reply: None,
+                    receipt: None,
+                    limitation: Some("Cancelled while preparing provider call; no durable main-process intent was created".into()),
+                });
+            }
+        }
+    };
+
+    let PreparedProviderInvocation {
+        descriptor_hash,
+        action,
+        prepared,
+        ..
+    } = prepared;
+    runtime.policy.check_action(&action)?;
+    // Recheck after the version probe in case another resumable worker sealed
+    // the same logical intent while preparation was in flight.
+    if intent_path.exists() {
+        return recover_provider_invocation_intent(
+            runtime,
+            &intent_path,
+            &intent_key,
+            actor,
+            playbook,
+            step,
+            invocation_binding,
+            overrides,
+        );
+    }
+
+    let mut intent = ProviderInvocationIntent::pending(
+        intent_key,
+        actor.to_owned(),
+        playbook.to_owned(),
+        step,
+        descriptor_hash,
+        action.clone(),
+    );
+    write_json(&intent_path, &intent)?;
+    let response = tokio::select! {
+        response = provider.complete_prepared_subscription(prepared) => Some(response),
+        _ = async {
+            loop {
+                if runtime.cancelled.load(Ordering::SeqCst) { break; }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        } => None,
+    };
+    let Some(response) = response else {
+        return Ok(ProviderStepResult {
+            reply: None,
+            receipt: None,
+            limitation: Some("Cancelled during subscription CLI call; durable intent left pending for indeterminate recovery".into()),
+        });
+    };
+    let (successful, data) = match &response {
+        Ok(reply) => (
+            true,
+            json!({
+                "evidentiary_use":"control_plane_only",
+                "outcome":"completed",
+                "reply":reply,
+            }),
+        ),
+        Err(error) => (
+            false,
+            json!({
+                "evidentiary_use":"control_plane_only",
+                "outcome":"failed",
+                "error":Redactor::with_override(overrides).text(&error.to_string()),
+                "transport_audit":error
+                    .downcast_ref::<providers::ProviderTransportFailure>()
+                    .map(|failure| failure.transport_audit().clone()),
+            }),
+        ),
+    };
+    let receipt = runtime.evidence.capture_with_override(
+        actor,
+        ToolOutput {
+            action,
+            successful,
+            data,
+            truncated: false,
+        },
+        overrides,
+    )?;
+    intent.state = ProviderInvocationIntentState::Receipted;
+    intent.receipt_id = Some(receipt.id.clone());
+    write_json(&intent_path, &intent)?;
+    provider_step_from_receipt(receipt)
+}
+
 fn compact_context(value: &mut Value, max_chars: usize) {
     match value {
         Value::String(s) => {
@@ -3820,6 +4408,7 @@ async fn run_specialist(
     resources: SessionResources,
 ) -> Result<SessionResult> {
     let SessionResources {
+        run_id,
         overrides,
         output,
         budget,
@@ -3844,7 +4433,10 @@ async fn run_specialist(
         })
         .collect::<Vec<_>>();
     let mut messages = vec![Message::User(serde_json::to_string(&context)?)];
-    let session_id = random_id("session")?;
+    let session_id = format!(
+        "specialist-{}",
+        hash(format!("{run_id}\0{finder}\0{}", playbook.id).as_bytes())
+    );
     for step in 0..steps {
         if runtime.cancelled.load(Ordering::SeqCst) {
             result.limitation = Some("Cancelled".into());
@@ -3870,13 +4462,34 @@ async fn run_specialist(
                 &json!({"reserved_steps":b.used_steps,"reserved_tokens":b.reserved_tokens,"max_steps":b.max_steps,"max_tokens":b.max_tokens,"estimator":"UTF-8 bytes plus protocol allowance plus maximum output; conservative reservation, not exact token billing"}),
             )?;
         }
-        let response = tokio::select! {r=provider.complete(&messages,&tools)=>r,_=async{loop{if runtime.cancelled.load(Ordering::SeqCst){break;}tokio::time::sleep(std::time::Duration::from_millis(50)).await;}}=>{result.limitation=Some("Cancelled during provider call".into());break;}};
-        let reply = match response {
-            Ok(r) => r,
-            Err(e) => {
-                result.limitation = Some(Redactor::with_override(&overrides).text(&e.to_string()));
-                break;
-            }
+        let invocation_binding = specialist_provider_invocation_binding(
+            &run_id,
+            &session_id,
+            &finder,
+            &playbook.id,
+            step,
+            &provider.identity(),
+            &overrides,
+        )?;
+        let outcome = invoke_provider_step(
+            &runtime,
+            &mut provider,
+            &messages,
+            &tools,
+            &playbook.id,
+            step,
+            &finder,
+            &output,
+            &overrides,
+            Some(&invocation_binding),
+        )
+        .await?;
+        if let Some(receipt) = outcome.receipt {
+            result.receipts.push(receipt);
+        }
+        let Some(reply) = outcome.reply else {
+            result.limitation = outcome.limitation;
+            break;
         };
         result.input_tokens += reply.input_tokens.unwrap_or_default();
         result.output_tokens += reply.output_tokens.unwrap_or_default();
@@ -5445,6 +6058,14 @@ fn parse_chain_risk(value: &str) -> Result<RiskLevel> {
 
 fn receipt_contributes_chain_surface(receipt: &Receipt) -> bool {
     !matches!(receipt.output.action, ToolAction::ApiSchemaProbe { .. })
+        && receipt_contributes_model_panel_evidence(receipt)
+}
+
+fn receipt_contributes_model_panel_evidence(receipt: &Receipt) -> bool {
+    !matches!(
+        &receipt.output.action,
+        ToolAction::External { subsystem, .. } if subsystem == "provider"
+    )
 }
 
 fn derive_web_chain_facts(url: &str, data: &Value, facts: &mut BTreeSet<String>) {
@@ -5697,6 +6318,26 @@ mod tests {
     use super::*;
     use std::sync::atomic::AtomicUsize;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    #[cfg(unix)]
+    fn fake_codex_cli(directory: &Path) -> Result<PathBuf> {
+        fake_codex_cli_version(directory, "0.147.0")
+    }
+
+    #[cfg(unix)]
+    fn fake_codex_cli_version(directory: &Path, version: &str) -> Result<PathBuf> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let executable = directory.join("codex");
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' 'codex-cli {version}'\n  exit 0\nfi\nexit 97\n"
+            ),
+        )?;
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))?;
+        Ok(executable)
+    }
 
     fn loopback_discovery_plan(seed: &str, plan_id: &str) -> Result<DiscoveryPlan> {
         Ok(DiscoveryPlan {
@@ -7003,6 +7644,455 @@ mod tests {
             expert_override: None,
         };
         assert!(!receipt_contributes_chain_surface(&receipt));
+    }
+
+    #[test]
+    fn provider_control_plane_receipts_never_enter_model_panel_evidence() {
+        let receipt = Receipt {
+            schema_version: SCHEMA_VERSION,
+            id: "provider-audit-receipt".into(),
+            run_id: "run-test".into(),
+            actor: "provider-runtime".into(),
+            captured_ms: 1,
+            content_hash: "a".repeat(64),
+            output: ToolOutput {
+                action: ToolAction::External {
+                    subsystem: "provider".into(),
+                    operation: "subscription_cli_invocation".into(),
+                    target: "openai:fixture".into(),
+                    parameters: json!({"transport":"subscription_cli"}),
+                },
+                successful: true,
+                data: json!({"evidentiary_use":"control_plane_only"}),
+                truncated: false,
+            },
+            expert_override: None,
+        };
+        assert!(!receipt_contributes_model_panel_evidence(&receipt));
+
+        let mut target_receipt = receipt;
+        target_receipt.output.action = ToolAction::HttpGet {
+            url: "https://example.test".into(),
+        };
+        assert!(receipt_contributes_model_panel_evidence(&target_receipt));
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn pending_model_panel_subscription_intent_becomes_indeterminate_without_repeating_turn(
+    ) -> Result<()> {
+        let output = tempfile::tempdir()?;
+        let overrides = ExpertOverrides {
+            controls: vec![
+                Control::ToolCapabilities,
+                Control::Sandbox,
+                Control::Network,
+                Control::SecretExposure,
+            ],
+            reason: "authorized provider intent recovery fixture".into(),
+            actor: "intent-test".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let policy = Policy::with_overrides(Scope::default(), overrides.clone())?;
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            "run-provider-intent",
+            Redactor::with_override(&overrides),
+        )?;
+        let mut runtime = Runtime::new(policy, evidence, Redactor::with_override(&overrides));
+        runtime.authorize(true);
+
+        let mut subscription = SubscriptionCliConfig::new(SubscriptionCliKind::Codex);
+        subscription.autonomy = SubscriptionCliAutonomy::ReadOnly;
+        subscription.executable = Some(fake_codex_cli(output.path())?);
+        let mut provider = Provider::with_overrides(
+            ProviderConfig {
+                kind: "openai".into(),
+                model: "fixture-model".into(),
+                endpoint: "local://subscription".into(),
+                key_env: None,
+                timeout_seconds: 10,
+                max_output_tokens: 128,
+                subscription_cli: Some(subscription),
+            },
+            overrides.clone(),
+        )?;
+        provider.authorize(true);
+        let messages = vec![Message::User("bounded fixture".into())];
+        let tools = Vec::<providers::ToolDefinition>::new();
+        let invocation = model_panel::PanelInvocation {
+            run_id: "run-provider-intent".into(),
+            session_id: "run-provider-intent:model-panel".into(),
+            member_id: "candidate-openai".into(),
+            fresh_context_id: "run-provider-intent-candidate-openai-candidate-1".into(),
+            role: model_panel::PanelRole::Candidate,
+            round: 1,
+            prompt: "bounded fixture".into(),
+            candidates: vec![],
+            allowed_receipt_ids: BTreeSet::new(),
+        };
+        let binding =
+            panel_provider_invocation_binding(&invocation, &provider.identity(), &overrides)?;
+        let actor = "provider:model-panel:candidate-openai";
+        let playbook = "model-panel:run-provider-intent:model-panel";
+        let step = 1usize;
+        let (intent_key, binding_hash) =
+            provider_invocation_intent_identity(actor, playbook, step, &binding)?;
+        let PreparedProviderInvocation {
+            descriptor_hash,
+            action,
+            prepared: _,
+            ..
+        } = prepare_provider_invocation(
+            &provider,
+            &messages,
+            &tools,
+            &intent_key,
+            &binding,
+            &binding_hash,
+        )
+        .await?;
+        let ToolAction::External { parameters, .. } = &action else {
+            anyhow::bail!("provider invocation must use an external action")
+        };
+        assert_eq!(
+            parameters["invocation_binding"]["member_id"],
+            "candidate-openai"
+        );
+        assert_eq!(parameters["invocation_binding"]["round"], 1);
+        assert_eq!(
+            parameters["invocation_binding"]["provider_identity"],
+            "openai:fixture-model"
+        );
+        let intents_dir = output.path().join("provider-invocation-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!("intent-{intent_key}.json"));
+        write_json(
+            &intent_path,
+            &ProviderInvocationIntent::pending(
+                intent_key,
+                actor.into(),
+                playbook.into(),
+                step,
+                descriptor_hash,
+                action,
+            ),
+        )?;
+        // Recovery is keyed by the logical call before preparation, so it must
+        // not require the CLI binary to remain installed after a crash.
+        std::fs::remove_file(output.path().join("codex"))?;
+
+        let outcome = invoke_provider_step(
+            &runtime,
+            &mut provider,
+            &messages,
+            &tools,
+            playbook,
+            step,
+            actor,
+            output.path(),
+            &overrides,
+            Some(&binding),
+        )
+        .await?;
+        assert!(outcome.reply.is_none());
+        let receipt = outcome.receipt.context("indeterminate receipt")?;
+        assert!(!receipt.output.successful);
+        assert_eq!(receipt.output.data["outcome"], "indeterminate");
+        assert!(!receipt_contributes_model_panel_evidence(&receipt));
+        assert!(!receipt_contributes_chain_surface(&receipt));
+        let intent: ProviderInvocationIntent = read_json(&intent_path)?;
+        assert_eq!(intent.state, ProviderInvocationIntentState::Indeterminate);
+        assert_eq!(intent.receipt_id.as_deref(), Some(receipt.id.as_str()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn pending_specialist_subscription_intent_recovers_without_cli_or_second_turn(
+    ) -> Result<()> {
+        let output = tempfile::tempdir()?;
+        let overrides = ExpertOverrides {
+            controls: vec![
+                Control::ToolCapabilities,
+                Control::Sandbox,
+                Control::Network,
+                Control::SecretExposure,
+            ],
+            reason: "authorized specialist intent recovery fixture".into(),
+            actor: "specialist-recovery-test".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let policy = Policy::with_overrides(Scope::default(), overrides.clone())?;
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            "run-specialist-recovery",
+            Redactor::with_override(&overrides),
+        )?;
+        let mut runtime = Runtime::new(policy, evidence, Redactor::with_override(&overrides));
+        runtime.authorize(true);
+
+        let mut subscription = SubscriptionCliConfig::new(SubscriptionCliKind::Codex);
+        subscription.autonomy = SubscriptionCliAutonomy::ReadOnly;
+        subscription.executable = Some(fake_codex_cli(output.path())?);
+        let mut provider = Provider::with_overrides(
+            ProviderConfig {
+                kind: "openai".into(),
+                model: "fixture-model".into(),
+                endpoint: "local://subscription".into(),
+                key_env: None,
+                timeout_seconds: 10,
+                max_output_tokens: 128,
+                subscription_cli: Some(subscription),
+            },
+            overrides.clone(),
+        )?;
+        provider.authorize(true);
+        let messages = vec![Message::User("specialist recovery fixture".into())];
+        let tools = Vec::<providers::ToolDefinition>::new();
+        let actor = "provider:openai:fixture-model:recon-http";
+        let playbook = "recon-http";
+        let step = 0usize;
+        let session_id = "specialist-stable-session";
+        let binding = specialist_provider_invocation_binding(
+            "run-specialist-recovery",
+            session_id,
+            actor,
+            playbook,
+            step,
+            &provider.identity(),
+            &overrides,
+        )?;
+        let (intent_key, binding_hash) =
+            provider_invocation_intent_identity(actor, playbook, step, &binding)?;
+        let PreparedProviderInvocation {
+            descriptor_hash,
+            action,
+            prepared: _,
+        } = prepare_provider_invocation(
+            &provider,
+            &messages,
+            &tools,
+            &intent_key,
+            &binding,
+            &binding_hash,
+        )
+        .await?;
+        let ToolAction::External { parameters, .. } = &action else {
+            anyhow::bail!("provider invocation must use an external action")
+        };
+        assert_eq!(parameters["invocation_binding"]["kind"], "specialist");
+        assert_eq!(
+            parameters["invocation_binding"]["run_id"],
+            "run-specialist-recovery"
+        );
+        assert_eq!(parameters["invocation_binding"]["session_id"], session_id);
+        assert!(
+            parameters["invocation_binding"]["override_provenance_sha256"]
+                .as_str()
+                .is_some_and(|value| value.len() == 64)
+        );
+        let intents_dir = output.path().join("provider-invocation-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!("intent-{intent_key}.json"));
+        write_json(
+            &intent_path,
+            &ProviderInvocationIntent::pending(
+                intent_key,
+                actor.into(),
+                playbook.into(),
+                step,
+                descriptor_hash,
+                action,
+            ),
+        )?;
+        std::fs::remove_file(output.path().join("codex"))?;
+
+        let outcome = invoke_provider_step(
+            &runtime,
+            &mut provider,
+            &messages,
+            &tools,
+            playbook,
+            step,
+            actor,
+            output.path(),
+            &overrides,
+            Some(&binding),
+        )
+        .await?;
+        assert!(outcome.reply.is_none());
+        let receipt = outcome
+            .receipt
+            .context("indeterminate specialist receipt")?;
+        assert_eq!(receipt.output.data["outcome"], "indeterminate");
+        assert!(!receipt_contributes_model_panel_evidence(&receipt));
+        assert!(!receipt_contributes_chain_surface(&receipt));
+        let intent: ProviderInvocationIntent = read_json(&intent_path)?;
+        assert_eq!(intent.state, ProviderInvocationIntentState::Indeterminate);
+        assert_eq!(intent.receipt_id.as_deref(), Some(receipt.id.as_str()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn pending_model_panel_subscription_intent_recovers_only_its_exact_sealed_receipt(
+    ) -> Result<()> {
+        let output = tempfile::tempdir()?;
+        let overrides = ExpertOverrides {
+            controls: vec![
+                Control::ToolCapabilities,
+                Control::Sandbox,
+                Control::Network,
+                Control::SecretExposure,
+            ],
+            reason: "authorized panel receipt recovery fixture".into(),
+            actor: "panel-recovery-test".into(),
+            acknowledged: true,
+            ..Default::default()
+        };
+        let policy = Policy::with_overrides(Scope::default(), overrides.clone())?;
+        let evidence = EvidenceStore::new(
+            &output.path().join("receipts"),
+            "run-panel-recovery",
+            Redactor::with_override(&overrides),
+        )?;
+        let mut runtime = Runtime::new(policy, evidence, Redactor::with_override(&overrides));
+        runtime.authorize(true);
+
+        let mut subscription = SubscriptionCliConfig::new(SubscriptionCliKind::Codex);
+        subscription.autonomy = SubscriptionCliAutonomy::ReadOnly;
+        subscription.executable = Some(fake_codex_cli(output.path())?);
+        let mut provider = Provider::with_overrides(
+            ProviderConfig {
+                kind: "openai".into(),
+                model: "fixture-model".into(),
+                endpoint: "local://subscription".into(),
+                key_env: None,
+                timeout_seconds: 10,
+                max_output_tokens: 128,
+                subscription_cli: Some(subscription),
+            },
+            overrides.clone(),
+        )?;
+        provider.authorize(true);
+        let messages = vec![Message::User("sealed recovery fixture".into())];
+        let tools = Vec::<providers::ToolDefinition>::new();
+        let invocation = model_panel::PanelInvocation {
+            run_id: "run-panel-recovery".into(),
+            session_id: "run-panel-recovery:model-panel".into(),
+            member_id: "reviewer-openai".into(),
+            fresh_context_id: "run-panel-recovery-reviewer-openai-reviewer-1".into(),
+            role: model_panel::PanelRole::Reviewer,
+            round: 1,
+            prompt: "sealed recovery fixture".into(),
+            candidates: vec![],
+            allowed_receipt_ids: BTreeSet::new(),
+        };
+        let binding =
+            panel_provider_invocation_binding(&invocation, &provider.identity(), &overrides)?;
+        let actor = "provider:model-panel:reviewer-openai";
+        let playbook = "model-panel:run-panel-recovery:model-panel";
+        let step = 1usize;
+        let (intent_key, binding_hash) =
+            provider_invocation_intent_identity(actor, playbook, step, &binding)?;
+        let PreparedProviderInvocation {
+            descriptor_hash,
+            action,
+            prepared: _,
+            ..
+        } = prepare_provider_invocation(
+            &provider,
+            &messages,
+            &tools,
+            &intent_key,
+            &binding,
+            &binding_hash,
+        )
+        .await?;
+        let mut wrong_round = invocation.clone();
+        wrong_round.round = 2;
+        wrong_round.fresh_context_id = "run-panel-recovery-reviewer-openai-reviewer-2".into();
+        let wrong_binding =
+            panel_provider_invocation_binding(&wrong_round, &provider.identity(), &overrides)?;
+        let (wrong_intent_key, wrong_binding_hash) =
+            provider_invocation_intent_identity(actor, playbook, 2, &wrong_binding)?;
+        let wrong_prepared = prepare_provider_invocation(
+            &provider,
+            &messages,
+            &tools,
+            &wrong_intent_key,
+            &wrong_binding,
+            &wrong_binding_hash,
+        )
+        .await?;
+        assert_ne!(intent_key, wrong_intent_key);
+        assert_ne!(action, wrong_prepared.action);
+        let intents_dir = output.path().join("provider-invocation-intents");
+        secure_dir(&intents_dir)?;
+        let intent_path = intents_dir.join(format!("intent-{intent_key}.json"));
+        write_json(
+            &intent_path,
+            &ProviderInvocationIntent::pending(
+                intent_key,
+                actor.into(),
+                playbook.into(),
+                step,
+                descriptor_hash,
+                action.clone(),
+            ),
+        )?;
+        let sealed = runtime.evidence.capture_with_override(
+            actor,
+            ToolOutput {
+                action,
+                successful: true,
+                data: json!({
+                    "evidentiary_use":"control_plane_only",
+                    "outcome":"completed",
+                    "reply": providers::Reply {
+                        calls: vec![],
+                        text: "sealed provider reply".into(),
+                        input_tokens: Some(3),
+                        output_tokens: Some(4),
+                        provider: "openai".into(),
+                        model: "fixture-model".into(),
+                        native_content: None,
+                        transport_audit: Some(json!({"evidentiary_use":"hypothesis_only"})),
+                    }
+                }),
+                truncated: false,
+            },
+            &overrides,
+        )?;
+        std::fs::remove_file(output.path().join("codex"))?;
+
+        let outcome = invoke_provider_step(
+            &runtime,
+            &mut provider,
+            &messages,
+            &tools,
+            playbook,
+            step,
+            actor,
+            output.path(),
+            &overrides,
+            Some(&binding),
+        )
+        .await?;
+        assert_eq!(
+            outcome.reply.context("recovered reply")?.text,
+            "sealed provider reply"
+        );
+        assert_eq!(outcome.receipt.context("recovered receipt")?.id, sealed.id);
+        let intent: ProviderInvocationIntent = read_json(&intent_path)?;
+        assert_eq!(intent.state, ProviderInvocationIntentState::Receipted);
+        assert_eq!(intent.receipt_id.as_deref(), Some(sealed.id.as_str()));
+        assert!(!receipt_contributes_model_panel_evidence(&sealed));
+        assert!(!receipt_contributes_chain_surface(&sealed));
+        Ok(())
     }
 
     #[tokio::test]

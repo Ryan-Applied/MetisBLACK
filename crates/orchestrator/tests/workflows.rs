@@ -409,6 +409,7 @@ async fn native_api_tool_loop_captures_real_receipts_and_canonicalizes_claims() 
         key_env: None,
         timeout_seconds: 2,
         max_output_tokens: 512,
+        subscription_cli: None,
     });
     let run = Engine::new(config)?.run().await?;
     let provider = run
@@ -670,6 +671,7 @@ async fn provider_and_resume_authorization_cannot_be_bypassed_by_mode_or_replace
         key_env: None,
         timeout_seconds: 1,
         max_output_tokens: 32,
+        subscription_cli: None,
     });
     assert!(Engine::new(config.clone()).is_err());
     config.overrides = expert(vec![Control::Network]);

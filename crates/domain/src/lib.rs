@@ -21,6 +21,16 @@ pub const API_SCHEMA_DEFAULT_MAX_PROPERTIES: u32 = 2_000;
 pub const API_SCHEMA_HARD_MAX_PROPERTIES: u32 = 20_000;
 pub const API_SCHEMA_DEFAULT_MAX_ARRAY_ITEMS: u32 = 1_000;
 pub const API_SCHEMA_HARD_MAX_ARRAY_ITEMS: u32 = 10_000;
+pub const SUBSCRIPTION_CLI_SCHEMA_VERSION: u32 = 1;
+pub const SUBSCRIPTION_CLI_DEFAULT_MAX_STDOUT_BYTES: u64 = 4 * 1_048_576;
+pub const SUBSCRIPTION_CLI_HARD_MAX_STDOUT_BYTES: u64 = 16 * 1_048_576;
+pub const SUBSCRIPTION_CLI_DEFAULT_MAX_STDERR_BYTES: u64 = 1_048_576;
+pub const SUBSCRIPTION_CLI_HARD_MAX_STDERR_BYTES: u64 = 4 * 1_048_576;
+pub const SUBSCRIPTION_CLI_DEFAULT_MAX_EVENTS: u32 = 10_000;
+pub const SUBSCRIPTION_CLI_HARD_MAX_EVENTS: u32 = 100_000;
+pub const SUBSCRIPTION_CLI_DEFAULT_MAX_TURNS: u32 = 16;
+pub const SUBSCRIPTION_CLI_HARD_MAX_TURNS: u32 = 64;
+pub const SUBSCRIPTION_CLI_HARD_MAX_PROFILE_ENVIRONMENT: usize = 64;
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub fn now_ms() -> u64 {
     SystemTime::now()
@@ -1447,6 +1457,12 @@ impl RunConfig {
                 }),
                 "model panel members require a positive cost budget and fallback estimation rate"
             );
+            for member in &panel.members {
+                member.provider.validate()?;
+            }
+        }
+        if let Some(provider) = &self.provider {
+            provider.validate()?;
         }
         if let Some(chains) = &self.chains {
             ensure!(chains.max_steps > 0, "chain max_steps must be positive");
@@ -1458,6 +1474,182 @@ impl RunConfig {
         }
         Ok(())
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionCliKind {
+    Claude,
+    Codex,
+}
+
+impl SubscriptionCliKind {
+    pub const fn provider_kind(self) -> &'static str {
+        match self {
+            Self::Claude => "anthropic",
+            Self::Codex => "openai",
+        }
+    }
+
+    pub const fn executable_name(self) -> &'static str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionCliAutonomy {
+    #[default]
+    InferenceOnly,
+    ReadOnly,
+    WorkspaceWrite,
+    Unrestricted,
+}
+
+/// Strict configuration for a locally authenticated model-provider CLI.
+///
+/// This contract deliberately has no generic argv or command field. Provider
+/// adapters own their fixed invocation grammar; operational permissions are
+/// represented by `autonomy` and remain subject to central policy and sandbox
+/// enforcement.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SubscriptionCliConfig {
+    pub schema_version: u32,
+    pub kind: SubscriptionCliKind,
+    #[serde(default)]
+    pub autonomy: SubscriptionCliAutonomy,
+    #[serde(default)]
+    pub executable: Option<PathBuf>,
+    #[serde(default)]
+    pub working_directory: Option<PathBuf>,
+    #[serde(default = "default_subscription_cli_stdout_bytes")]
+    pub max_stdout_bytes: u64,
+    #[serde(default = "default_subscription_cli_stderr_bytes")]
+    pub max_stderr_bytes: u64,
+    #[serde(default = "default_subscription_cli_events")]
+    pub max_events: u32,
+    #[serde(default = "default_subscription_cli_turns")]
+    pub max_turns: u32,
+    #[serde(default)]
+    pub profile_environment: Vec<String>,
+    #[serde(default)]
+    pub inherit_environment: bool,
+    /// Re-enable customization sources controlled by the selected CLI's fixed
+    /// adapter flags. This lower-determinism route is unrestricted only.
+    #[serde(default)]
+    pub load_native_customizations: bool,
+}
+
+impl SubscriptionCliConfig {
+    pub fn new(kind: SubscriptionCliKind) -> Self {
+        Self {
+            schema_version: SUBSCRIPTION_CLI_SCHEMA_VERSION,
+            kind,
+            autonomy: SubscriptionCliAutonomy::InferenceOnly,
+            executable: None,
+            working_directory: None,
+            max_stdout_bytes: SUBSCRIPTION_CLI_DEFAULT_MAX_STDOUT_BYTES,
+            max_stderr_bytes: SUBSCRIPTION_CLI_DEFAULT_MAX_STDERR_BYTES,
+            max_events: SUBSCRIPTION_CLI_DEFAULT_MAX_EVENTS,
+            max_turns: SUBSCRIPTION_CLI_DEFAULT_MAX_TURNS,
+            profile_environment: Vec::new(),
+            inherit_environment: false,
+            load_native_customizations: false,
+        }
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        ensure!(
+            self.schema_version == SUBSCRIPTION_CLI_SCHEMA_VERSION,
+            "unsupported subscription CLI schema"
+        );
+        ensure!(
+            self.kind != SubscriptionCliKind::Codex
+                || self.autonomy != SubscriptionCliAutonomy::InferenceOnly,
+            "Codex inference-only is unsupported because the CLI has no verified no-tools mode; select read-only or a stronger explicitly authorized autonomy"
+        );
+        if let Some(executable) = &self.executable {
+            ensure!(
+                executable.is_absolute(),
+                "subscription CLI executable must be an absolute path"
+            );
+        }
+        if let Some(working_directory) = &self.working_directory {
+            ensure!(
+                working_directory.is_absolute(),
+                "subscription CLI working directory must be an absolute path"
+            );
+        }
+        ensure!(
+            (1..=SUBSCRIPTION_CLI_HARD_MAX_STDOUT_BYTES).contains(&self.max_stdout_bytes),
+            "subscription CLI stdout bound exceeds the hard ceiling"
+        );
+        ensure!(
+            (1..=SUBSCRIPTION_CLI_HARD_MAX_STDERR_BYTES).contains(&self.max_stderr_bytes),
+            "subscription CLI stderr bound exceeds the hard ceiling"
+        );
+        ensure!(
+            (1..=SUBSCRIPTION_CLI_HARD_MAX_EVENTS).contains(&self.max_events),
+            "subscription CLI event bound exceeds the hard ceiling"
+        );
+        ensure!(
+            (1..=SUBSCRIPTION_CLI_HARD_MAX_TURNS).contains(&self.max_turns),
+            "subscription CLI turn bound exceeds the hard ceiling"
+        );
+        ensure!(
+            self.profile_environment.len() <= SUBSCRIPTION_CLI_HARD_MAX_PROFILE_ENVIRONMENT,
+            "subscription CLI environment allowlist exceeds the hard ceiling"
+        );
+        ensure!(
+            !self.inherit_environment || self.autonomy == SubscriptionCliAutonomy::Unrestricted,
+            "blanket subscription CLI environment inheritance requires unrestricted autonomy"
+        );
+        ensure!(
+            !self.load_native_customizations
+                || self.autonomy == SubscriptionCliAutonomy::Unrestricted,
+            "native subscription CLI customizations require unrestricted autonomy"
+        );
+        let mut names = std::collections::BTreeSet::new();
+        for name in &self.profile_environment {
+            ensure!(
+                valid_environment_name(name),
+                "invalid subscription CLI environment name"
+            );
+            ensure!(
+                names.insert(name.to_ascii_uppercase()),
+                "duplicate subscription CLI environment name"
+            );
+        }
+        Ok(())
+    }
+}
+
+fn default_subscription_cli_stdout_bytes() -> u64 {
+    SUBSCRIPTION_CLI_DEFAULT_MAX_STDOUT_BYTES
+}
+fn default_subscription_cli_stderr_bytes() -> u64 {
+    SUBSCRIPTION_CLI_DEFAULT_MAX_STDERR_BYTES
+}
+fn default_subscription_cli_events() -> u32 {
+    SUBSCRIPTION_CLI_DEFAULT_MAX_EVENTS
+}
+fn default_subscription_cli_turns() -> u32 {
+    SUBSCRIPTION_CLI_DEFAULT_MAX_TURNS
+}
+fn valid_environment_name(name: &str) -> bool {
+    if name.is_empty() || name.len() > 128 {
+        return false;
+    }
+    let mut bytes = name.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    (first == b'_' || first.is_ascii_alphabetic())
+        && bytes.all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1472,6 +1664,33 @@ pub struct ProviderConfig {
     pub timeout_seconds: u64,
     #[serde(default = "default_tokens")]
     pub max_output_tokens: u32,
+    #[serde(default)]
+    pub subscription_cli: Option<SubscriptionCliConfig>,
+}
+impl ProviderConfig {
+    pub fn validate(&self) -> Result<()> {
+        if let Some(subscription) = &self.subscription_cli {
+            subscription.validate()?;
+            ensure!(
+                self.kind == subscription.kind.provider_kind(),
+                "subscription CLI is incompatible with provider kind"
+            );
+            ensure!(
+                self.endpoint == "local://subscription",
+                "subscription CLI provider endpoint must be exactly local://subscription"
+            );
+            ensure!(
+                self.key_env.is_none(),
+                "subscription CLI provider cannot declare key_env"
+            );
+        } else {
+            ensure!(
+                self.endpoint != "local://subscription",
+                "local://subscription requires a typed subscription_cli configuration"
+            );
+        }
+        Ok(())
+    }
 }
 fn default_timeout() -> u64 {
     60
@@ -1743,6 +1962,111 @@ mod tests {
         config.mode = Mode::Blackbox;
         config.api_validation_plan_hash = Some("B".repeat(64));
         assert!(config.validate().is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn subscription_cli_contract_is_strict_and_provider_bound() -> Result<()> {
+        let executable = std::env::current_exe()?;
+        let working_directory = std::env::current_dir()?;
+        let base = serde_json::json!({
+            "kind": "anthropic",
+            "model": "claude-fixture",
+            "endpoint": "local://subscription",
+            "key_env": null,
+            "timeout_seconds": 60,
+            "max_output_tokens": 4096,
+            "subscription_cli": {
+                "schema_version": 1,
+                "kind": "claude",
+                "autonomy": "workspace_write",
+                "executable": executable,
+                "working_directory": working_directory,
+                "max_stdout_bytes": 4194304,
+                "max_stderr_bytes": 1048576,
+                "max_events": 10000,
+                "max_turns": 16,
+                "profile_environment": ["HOME", "PATH"],
+                "inherit_environment": false
+            }
+        });
+        let provider: ProviderConfig = serde_json::from_value(base.clone())?;
+        provider.validate()?;
+
+        let mut value = base.clone();
+        value["subscription_cli"]["schema_version"] = serde_json::json!(2);
+        assert!(serde_json::from_value::<ProviderConfig>(value)?
+            .validate()
+            .is_err());
+
+        let mut value = base.clone();
+        value["subscription_cli"]["args"] = serde_json::json!(["--dangerously-skip-permissions"]);
+        assert!(serde_json::from_value::<ProviderConfig>(value).is_err());
+
+        let mut value = base.clone();
+        value["subscription_cli"]["autonomy"] = serde_json::json!("root");
+        assert!(serde_json::from_value::<ProviderConfig>(value).is_err());
+
+        let mut value = base.clone();
+        value["subscription_cli"]["executable"] = serde_json::json!("bin/claude");
+        assert!(serde_json::from_value::<ProviderConfig>(value)?
+            .validate()
+            .is_err());
+
+        let mut value = base.clone();
+        value["kind"] = serde_json::json!("openai");
+        assert!(serde_json::from_value::<ProviderConfig>(value)?
+            .validate()
+            .is_err());
+
+        let mut value = base.clone();
+        value["endpoint"] = serde_json::json!("https://api.anthropic.com");
+        assert!(serde_json::from_value::<ProviderConfig>(value)?
+            .validate()
+            .is_err());
+
+        let mut value = base.clone();
+        value["key_env"] = serde_json::json!("ANTHROPIC_API_KEY");
+        assert!(serde_json::from_value::<ProviderConfig>(value)?
+            .validate()
+            .is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn subscription_cli_bounds_and_environment_allowlist_fail_closed() -> Result<()> {
+        let mut config = SubscriptionCliConfig::new(SubscriptionCliKind::Codex);
+        assert!(config.validate().is_err());
+        config.autonomy = SubscriptionCliAutonomy::ReadOnly;
+        config.validate()?;
+
+        config.max_stdout_bytes = SUBSCRIPTION_CLI_HARD_MAX_STDOUT_BYTES + 1;
+        assert!(config.validate().is_err());
+        config.max_stdout_bytes = SUBSCRIPTION_CLI_DEFAULT_MAX_STDOUT_BYTES;
+        config.max_stderr_bytes = 0;
+        assert!(config.validate().is_err());
+        config.max_stderr_bytes = SUBSCRIPTION_CLI_DEFAULT_MAX_STDERR_BYTES;
+        config.max_events = SUBSCRIPTION_CLI_HARD_MAX_EVENTS + 1;
+        assert!(config.validate().is_err());
+        config.max_events = SUBSCRIPTION_CLI_DEFAULT_MAX_EVENTS;
+        config.max_turns = SUBSCRIPTION_CLI_HARD_MAX_TURNS + 1;
+        assert!(config.validate().is_err());
+        config.max_turns = SUBSCRIPTION_CLI_DEFAULT_MAX_TURNS;
+        config.profile_environment = vec!["PATH".into(), "path".into()];
+        assert!(config.validate().is_err());
+        config.profile_environment = vec!["BAD=VALUE".into()];
+        assert!(config.validate().is_err());
+        config.profile_environment.clear();
+        config.inherit_environment = true;
+        assert!(config.validate().is_err());
+        config.autonomy = SubscriptionCliAutonomy::Unrestricted;
+        config.validate()?;
+        config.autonomy = SubscriptionCliAutonomy::ReadOnly;
+        config.inherit_environment = false;
+        config.load_native_customizations = true;
+        assert!(config.validate().is_err());
+        config.autonomy = SubscriptionCliAutonomy::Unrestricted;
+        config.validate()?;
         Ok(())
     }
 }

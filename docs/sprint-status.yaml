@@ -1,8 +1,8 @@
 project: "MetisBLACK"
 program: "P0-P2 production parity"
 last_updated: "2026-09-27T00:00:00+10:00"
-sprint: 2
-objective: "Add receipt-backed active API contract validation without weakening scope, replay, or evidence guarantees"
+sprint: 3
+objective: "Add audited autonomous subscription-CLI providers without treating native agent activity as trusted evidence"
 stories:
   E01-S01:
     file: "docs/stories/story-E01-S01.md"
@@ -28,6 +28,10 @@ stories:
     file: "docs/stories/story-E04-S03.md"
     status: "done"
     owner: "api-validation swarm"
+  E08-S01:
+    file: "docs/stories/story-E08-S01.md"
+    status: "in-progress"
+    owner: "provider-cli swarm"
   E12-S01:
     file: "docs/stories/story-E12-S01.md"
     status: "done"

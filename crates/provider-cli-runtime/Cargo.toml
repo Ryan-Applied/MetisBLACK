@@ -1,25 +1,30 @@
 [package]
-name = "metisblack-providers"
+name = "metisblack-provider-cli-runtime"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
 
+[lib]
+name = "provider_cli_runtime"
+path = "src/lib.rs"
+
 [lints]
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
 domain = { package = "metisblack-domain", path = "../domain" }
-storage = { package = "metisblack-storage", path = "../storage" }
-provider-cli-runtime = { package = "metisblack-provider-cli-runtime", path = "../provider-cli-runtime" }
+ring.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-anyhow.workspace = true
+storage = { package = "metisblack-storage", path = "../storage" }
 tokio.workspace = true
-reqwest.workspace = true
-url.workspace = true
-futures.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+[[bin]]
+name = "fake-subscription-cli"
+path = "src/bin/fake_subscription_cli.rs"

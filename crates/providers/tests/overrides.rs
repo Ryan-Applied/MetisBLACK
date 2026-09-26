@@ -20,6 +20,7 @@ fn config(kind: &str, endpoint: &str) -> ProviderConfig {
         key_env: None,
         timeout_seconds: 1,
         max_output_tokens: 256,
+        subscription_cli: None,
     }
 }
 #[test]
