@@ -35,7 +35,7 @@ submission, fuzzing and exploit payloads require later typed actions and proofs.
 
 ## Verification record
 
-Status: in progress; local verification passed, final-head CI pending.
+Status: done.
 
 The current implementation adds a dedicated `web-discovery` crate and a typed
 `WebDiscoveryFetch` action. The pure state machine owns strict versioned plans,
@@ -60,7 +60,10 @@ real-loopback acquisition. Atomic writes sync the file on every supported platfo
 and additionally fsync the parent directory on Unix; power-loss directory durability
 on non-Unix platforms is not claimed.
 
-The story remains open only until a final-head GitHub Actions run records the same
-locked gates. Interoperability
-across real TLS, CDN, compression, proxy and framework variants still requires an
-opt-in owned live lab; those variants are not claimed here.
+GitHub Actions run
+[`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
+passed all five jobs from commit `8a1f693` using the declared Rust 1.88 MSRV:
+the strict format/check/test/lint lane, dependency policy, Ubuntu, macOS 14 arm64,
+and Windows. Interoperability across real TLS, CDN, compression, proxy and
+framework variants still requires an opt-in owned live lab; those variants are
+not claimed here.

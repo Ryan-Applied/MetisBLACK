@@ -35,7 +35,7 @@ chains and state-changing web exploits remain separate receipt-backed stories.
 
 ## Verification record
 
-Status: in progress; local verification passed, final-head CI pending.
+Status: done.
 
 The current implementation adds a strict `OpenRedirectObservation`, typed
 `OpenRedirectProbe` action and `Proof::OpenRedirect`. Policy validates the
@@ -59,8 +59,10 @@ A real-loopback fixture exercises confirmation with fresh replay canaries,
 positive crash recovery, exact intent binding, missing-intent recovery, explicit
 failure/retry, and present/fixed/inconclusive retest semantics. Local verification
 on 2026-09-27 passed formatting, locked all-target/all-feature check, Clippy with
-warnings denied, and all **197** workspace tests. The story remains open until the
-final-head GitHub Actions run is recorded.
-An owned authorized live lab is still required before broader framework
+warnings denied, and all **197** workspace tests. GitHub Actions run
+[`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
+passed all five jobs from commit `8a1f693` using the declared Rust 1.88 MSRV:
+the strict format/check/test/lint lane, dependency policy, Ubuntu, macOS 14 arm64,
+and Windows. An owned authorized live lab is still required before broader framework
 interoperability is claimed; this is one observe-only vulnerability class, not
 broad web exploitation parity.

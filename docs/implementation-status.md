@@ -31,7 +31,7 @@ is not modified or invoked by this workspace.
 | Typed domain contracts | Implemented | Strict Serde schemas, explicit modes/severity/states/proofs, model requests cannot set finding state |
 | Central policy | Implemented for current tools | Network, URL, host, port, CIDR, filesystem, sampling, request/state/account budgets, command classes, and expert controls are evaluated in code |
 | HTTP runtime | Implemented, bounded | GET plus typed GET/HEAD/OPTIONS/POST/PUT/PATCH/DELETE; state-changing methods consume budgets and generic mutations require overrides; no inherited proxy/cookie jar; checked DNS and redirects |
-| Web discovery | Implemented, bounded | Strict versioned plans/checkpoints/artifacts; finite BFS and hard ceilings; exact allowed origins; one-response no-redirect fetches; HTML, form-shape, robots, sitemap, JavaScript-hint and OpenAPI v2/v3 parsing; explicit omissions; durable pre-send intents; exact receipt recovery; receipt-backed independent artifact rebuild | Observation only: no JavaScript execution, form submission, remote OpenAPI references, API invocation, authenticated state, automatic vulnerability claim or chain edge. Local E04 gates pass; final-head CI remains to be recorded |
+| Web discovery | Implemented, bounded | Strict versioned plans/checkpoints/artifacts; finite BFS and hard ceilings; exact allowed origins; one-response no-redirect fetches; HTML, form-shape, robots, sitemap, JavaScript-hint and OpenAPI v2/v3 parsing; explicit omissions; durable pre-send intents; exact receipt recovery; receipt-backed independent artifact rebuild | Observation only: no JavaScript execution, form submission, remote OpenAPI references, API invocation, authenticated state, automatic vulnerability claim or chain edge. Local and final-head E04 foundation gates pass |
 | Source runtime | Implemented, bounded | Canonical scoped path, symlink and secret-path checks, UTF-8 line capture with source hash; conservative hash-bound lexical flows preserve typed sources, sinks, sanitizers and unknown hops and are linked to source receipts by orchestration |
 | DNS and TCP runtime | Implemented, bounded | Explicit host/port scope; TCP only and no application payload |
 | Expert shell | Implemented only through overrides | Unsandboxed child process with captured output. It requires explicit capability/sandbox/network/filesystem overrides plus command-risk permission. See `expert-overrides.md` |
@@ -88,7 +88,10 @@ The E04 test sources add deterministic discovery contracts/parsing and every
 finite-cap fixture, exact receipt-based artifact reconstruction, missing/pending
 intent recovery, tamper rejection, secret-seed policy, mid-frontier pause/cancel
 resume, canonical path coverage, and real-loopback open-redirect crash/retry and
-replay/retest fixtures. All local gates pass; final-head CI is still pending.
+replay/retest fixtures. All local gates and final-head GitHub Actions run
+[`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
+pass, including the strict quality and dependency-policy jobs and locked Rust 1.88
+tests on Ubuntu, macOS 14 arm64 and Windows.
 CI is configured to run:
 
 ```bash

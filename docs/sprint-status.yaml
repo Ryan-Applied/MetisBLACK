@@ -18,11 +18,11 @@ stories:
     owner: "cloud-runtime swarm"
   E04-S01:
     file: "docs/stories/story-E04-S01.md"
-    status: "in-progress"
+    status: "done"
     owner: "web-discovery swarm"
   E04-S02:
     file: "docs/stories/story-E04-S02.md"
-    status: "in-progress"
+    status: "done"
     owner: "web-validation swarm"
   E12-S01:
     file: "docs/stories/story-E12-S01.md"

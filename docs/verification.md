@@ -59,10 +59,9 @@ One incomplete-heading warning was retained for `meta/role_pentestfull`.
 CI defines locked all-feature platform lanes for Ubuntu, macOS 14 arm64 and
 Windows in addition to the strict quality and dependency-policy jobs. GitHub
 Actions run
-[`36265458472`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265458472)
-passed all five jobs from commit `8b37577` using the declared Rust 1.88 MSRV.
-The E04 changes documented above are newer than that run and still require a
-final-head CI record.
+[`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
+passed all five jobs from commit `8a1f693` using the declared Rust 1.88 MSRV,
+including the E04 foundation implementation documented above.
 
 Not executed locally: `cargo deny check` (cargo-deny is not installed), live
 provider authentication, real provider-cloud accounts, a real WebDriver,

@@ -51,7 +51,7 @@ A capability is complete only when all applicable gates pass:
 - Each story updates `implementation-status.md`, this table, and `sprint-status.yaml`
   only after code review and its scoped verification pass.
 
-E04 currently has two in-progress foundation stories: receipt-backed bounded
+E04 has completed two foundation stories: receipt-backed bounded
 surface discovery (E04-S01) and one observe-only open-redirect validator
 (E04-S02). Their implementation does not complete the E04 exit condition: active
 schema/API validation, authenticated discovery, additional prioritized web
@@ -63,10 +63,9 @@ coverage remain future receipt-backed stories.
 The current repository baseline is 197 passing local tests. This proves the existing
 bounded contracts and fixtures, not production parity or live external behavior.
 GitHub Actions run
-[`36265458472`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265458472)
-also passes the locked Rust 1.88 workspace on Ubuntu, macOS 14 arm64 and Windows,
-the strict quality lane and dependency policy. This completes story E12-S01 but
-not the remaining E12 live-lab, signing, provenance, SBOM or automation work.
-The E04-S01/S02 implementation has passed its local gates but is newer than that
-remote baseline; neither story is complete until a final-head remote run is added
-to the story verification records.
+[`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
+passes commit `8a1f693` with the locked Rust 1.88 workspace on Ubuntu, macOS 14
+arm64 and Windows, the strict quality lane and dependency policy. This completes
+the bounded E04-S01/S02 foundation stories and story E12-S01, but not the E04 exit
+condition or the remaining E12 live-lab, signing, provenance, SBOM and automation
+work.
