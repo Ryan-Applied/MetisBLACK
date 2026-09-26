@@ -3,6 +3,10 @@ use domain::{Control, ExpertOverrides, Scope, ToolAction};
 use evidence::EvidenceStore;
 use metisblack_tool_runtime::Runtime;
 use policy::{scope_for_url, Policy};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
 use storage::Redactor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -33,27 +37,45 @@ async fn fixture(
     headers: &str,
     body: &str,
 ) -> Result<(String, tokio::task::JoinHandle<()>)> {
+    let (url, handle, _) = tracked_fixture(delay_ms, status, headers, body).await?;
+    Ok((url, handle))
+}
+
+async fn tracked_fixture(
+    delay_ms: u64,
+    status: u16,
+    headers: &str,
+    body: &str,
+) -> Result<(String, tokio::task::JoinHandle<()>, Arc<AtomicUsize>)> {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let url = format!("http://{}", listener.local_addr()?);
     let response = format!(
         "HTTP/1.1 {status} OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_in_flight = Arc::new(AtomicUsize::new(0));
+    let observed_max = max_in_flight.clone();
     let handle = tokio::spawn(async move {
         loop {
             let Ok((mut stream, _)) = listener.accept().await else {
                 break;
             };
             let response = response.clone();
+            let active = active.clone();
+            let max_in_flight = max_in_flight.clone();
             tokio::spawn(async move {
                 let mut bytes = [0u8; 4096];
                 let _ = stream.read(&mut bytes).await;
+                let in_flight = active.fetch_add(1, Ordering::SeqCst) + 1;
+                max_in_flight.fetch_max(in_flight, Ordering::SeqCst);
                 tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
                 let _ = stream.write_all(response.as_bytes()).await;
+                active.fetch_sub(1, Ordering::SeqCst);
             });
         }
     });
-    Ok((url, handle))
+    Ok((url, handle, observed_max))
 }
 
 #[tokio::test]
@@ -104,12 +126,9 @@ async fn timeout_override_really_removes_tool_deadline() -> Result<()> {
 
 #[tokio::test]
 async fn rate_and_concurrency_overrides_change_actual_execution_scheduling() -> Result<()> {
-    let (url, server) = fixture(90, 200, "", "OK").await?;
-    for (control, baseline_ms, bypass_ms) in [
-        (Control::Concurrency, 160u128, 160u128),
-        (Control::RateLimit, 170u128, 170u128),
-    ] {
+    for control in [Control::Concurrency, Control::RateLimit] {
         for enabled in [false, true] {
+            let (url, server, max_in_flight) = tracked_fixture(90, 200, "", "OK").await?;
             let root = tempfile::tempdir()?;
             let mut scope = scope_for_url(&url)?;
             scope.max_concurrency = if control == Control::Concurrency {
@@ -128,24 +147,20 @@ async fn rate_and_concurrency_overrides_change_actual_execution_scheduling() -> 
                 ExpertOverrides::default()
             };
             let r = runtime(root.path(), scope, overrides)?;
-            let start = std::time::Instant::now();
             let (a, b) = tokio::join!(
                 r.execute("a", ToolAction::HttpGet { url: url.clone() }),
                 r.execute("b", ToolAction::HttpGet { url: url.clone() })
             );
             assert!(a?.output.successful && b?.output.successful);
-            let elapsed = start.elapsed().as_millis();
-            if enabled {
-                assert!(elapsed < bypass_ms, "{control:?} bypass took {elapsed}ms");
-            } else {
-                assert!(
-                    elapsed >= baseline_ms,
-                    "{control:?} default took {elapsed}ms"
-                );
-            }
+            let expected = if enabled { 2 } else { 1 };
+            assert_eq!(
+                max_in_flight.load(Ordering::SeqCst),
+                expected,
+                "{control:?} scheduling with bypass={enabled}"
+            );
+            server.abort();
         }
     }
-    server.abort();
     Ok(())
 }
 #[tokio::test]
