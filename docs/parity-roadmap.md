@@ -51,12 +51,11 @@ A capability is complete only when all applicable gates pass:
 - Each story updates `implementation-status.md`, this table, and `sprint-status.yaml`
   only after code review and its scoped verification pass.
 
-E04 has completed two foundation stories: receipt-backed bounded
-surface discovery (E04-S01) and one observe-only open-redirect validator
-(E04-S02). E04-S03 adds bounded receipt-derived response-contract validation for
-explicit anonymous input-free OpenAPI operations, has passed the local acceptance
-matrix, and remains under final-head CI verification. These stories do not complete
-the E04 exit condition:
+E04 has completed three foundation stories: receipt-backed bounded surface
+discovery (E04-S01), one observe-only open-redirect validator (E04-S02), and
+bounded receipt-derived response-contract validation for explicit anonymous
+input-free OpenAPI operations (E04-S03). These stories do not complete the E04 exit
+condition:
 authenticated discovery and API roles, mutation/cleanup validation, additional
 prioritized web vulnerability classes, owned-live-lab certification, and broader
 exploit-chain coverage remain future receipt-backed stories.
@@ -66,10 +65,9 @@ exploit-chain coverage remain future receipt-backed stories.
 The current repository baseline is 271 passing local tests. This proves the existing
 bounded contracts and fixtures, not production parity or live external behavior.
 GitHub Actions run
-[`36269877662`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36269877662)
-passes commit `8a1f693` with the locked Rust 1.88 workspace on Ubuntu, macOS 14
-arm64 and Windows, the strict quality lane and dependency policy. This completes
-the bounded E04-S01/S02 foundation stories and story E12-S01. E04-S03 final-head CI
-is pending; neither its local pass nor the prior CI run completes the E04 exit
-condition or the remaining E12 live-lab, signing, provenance, SBOM and automation
-work.
+[`36273283530`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36273283530)
+passes E04-S03 acceptance commit `8c146ad` with the locked Rust 1.88 workspace on
+Ubuntu, macOS 14 arm64 and Windows, the strict quality lane and dependency policy.
+This completes the bounded E04-S01/S02/S03 foundation stories and story E12-S01,
+but not the E04 exit condition or the remaining E12 live-lab, signing, provenance,
+SBOM and automation work.

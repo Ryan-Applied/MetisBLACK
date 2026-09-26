@@ -26,7 +26,7 @@ stories:
     owner: "web-validation swarm"
   E04-S03:
     file: "docs/stories/story-E04-S03.md"
-    status: "in-progress"
+    status: "done"
     owner: "api-validation swarm"
   E12-S01:
     file: "docs/stories/story-E12-S01.md"

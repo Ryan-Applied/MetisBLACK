@@ -64,7 +64,7 @@ validation require later stories with credential isolation and verified cleanup.
 
 ## Verification record
 
-Status: in progress.
+Status: done.
 
 Local acceptance passed on 2026-09-27 with stable Rust 1.94 on macOS arm64:
 
@@ -79,5 +79,8 @@ The all-feature workspace suite passed 271 tests with no failures or ignored tes
 The scoped contract, runtime, policy, orchestration, retest and reporting fixtures
 include hostile tamper, crash-recovery, retry, truncation, cancellation, proxy,
 redirect and unsupported-contract cases. Final-head CI on the declared Rust 1.88
-matrix and dependency-policy job is still required before this story is marked
-done.
+matrix and dependency-policy job passed in GitHub Actions run
+[`36273283530`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36273283530)
+for acceptance commit `8c146ad`. All five jobs succeeded: the strict
+format/check/test/Clippy lane, dependency policy, and locked workspace checks and
+tests on Ubuntu, macOS 14 arm64 and Windows.
