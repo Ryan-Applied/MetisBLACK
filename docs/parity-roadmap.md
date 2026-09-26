@@ -35,11 +35,11 @@ A capability is complete only when all applicable gates pass:
 | E05 | P0 | Host, Windows and Active Directory | Protocol-aware discovery, credentialed SSH/WinRM/SMB/LDAP inspection, AD relationships and safe replay | Planned |
 | E06 | P0 | AI, MCP and workflow assessment | Multi-turn scenario runner, attacker/judge separation, canaries, tool/RAG/MCP surfaces and reproducible verdicts | Planned |
 | E07 | P0 | Attack-chain breadth | Verified primitive registry, evidence-backed dynamic DAGs, loot propagation, typed adapters and cleanup | Planned |
-| E08 | P1 | Provider and swarm platform | Subscription CLIs, provider breadth, streaming, reasoning controls, native cost telemetry, routing and durable workers | In progress: E08-S01 adds audited Claude/Codex subscription transports and explicit autonomous modes; Gemini/Grok, streaming, durable workers and broader telemetry remain |
+| E08 | P1 | Provider and swarm platform | Subscription CLIs, provider breadth, streaming, reasoning controls, native cost telemetry, routing and durable workers | In progress: E08-S01 adds audited Claude/Codex subscription transports, explicit autonomous modes, durable pre-spawn intents, exact-receipt recovery and failure-closed panel integration; Gemini/Grok, streaming, durable distributed workers and broader telemetry remain |
 | E09 | P1 | SDLC integrations | Remote PR/MR fetch, private clone, reviews, status gates, branch watch, Jira issues and mention automation | Planned |
 | E10 | P1 | Operator experience and reports | Natural-language REPL, production TUI, project memory, proxies, targeted retest, PDF/Typst and evidence bundles | Planned |
 | E11 | P2 | Runtime and data hardening | OS sandbox, managed keys, evidence retention/deletion, stable configuration migrations and distributed execution | Planned |
-| E12 | P2 | Release engineering | Cross-platform CI, live-lab certification, signed artifacts, provenance, SBOMs and dependency automation | In progress |
+| E12 | P2 | Release engineering | Cross-platform CI, live-lab certification, signed artifacts, provenance, SBOMs and dependency automation | In progress: locked Linux/macOS/Windows CI and a verified local optimized build exist; live-lab certification, signing, published provenance/SBOMs and dependency automation remain |
 
 ## Ordering and integration rules
 
@@ -60,14 +60,35 @@ authenticated discovery and API roles, mutation/cleanup validation, additional
 prioritized web vulnerability classes, owned-live-lab certification, and broader
 exploit-chain coverage remain future receipt-backed stories.
 
+E08-S01 now provides native Claude Code and Codex subscription transports with
+fixed direct argument vectors, bounded input/output/runtime, explicit environment
+profiles, executable identity checks and single-use prepared invocations. Safe,
+read-only and unrestricted autonomous modes are explicit; unrestricted mode
+requires the audited override bundle or `unsafe_all`, and uses only the providers'
+exact dangerous flags. Every specialist and panel call is bound to a durable
+pre-spawn intent, and ambiguous recovery fails closed instead of repeating a turn.
+Native CLI activity is control-plane audit metadata and is never admitted as target
+evidence. This does not complete E08 or E11: cross-platform process-tree
+containment, an OS sandbox, provider-only egress, managed credential brokerage,
+Gemini/Grok subscription adapters, streaming, durable distributed workers, broad
+reasoning controls and complete native cost telemetry remain open.
+
 ## Current verification baseline
 
-The current repository baseline is 271 passing local tests. This proves the existing
-bounded contracts and fixtures, not production parity or live external behavior.
+The current locked repository baseline is 311 passing non-ignored local tests.
+Two authenticated subscription probes are ignored by the fixture matrix and were
+run separately against Claude Code `2.1.283` and Codex CLI `0.147.0`; both passed
+in unrestricted mode with their exact dangerous flags. Formatting, all-target and
+all-feature checking, strict Clippy and the optimized build pass locally. The local
+macOS arm64 `metisblack 0.1.0` artifact has SHA-256
+`8594d65c7f75171bc3c1dac64139bb0b55ba0365c4e6d25af09c53632b9f48d8`.
+
 GitHub Actions run
-[`36273283530`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36273283530)
-passes E04-S03 acceptance commit `8c146ad` with the locked Rust 1.88 workspace on
-Ubuntu, macOS 14 arm64 and Windows, the strict quality lane and dependency policy.
-This completes the bounded E04-S01/S02/S03 foundation stories and story E12-S01,
-but not the E04 exit condition or the remaining E12 live-lab, signing, provenance,
-SBOM and automation work.
+[`36277987141`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36277987141)
+passes final-head commit `6f45b98` with the locked Rust 1.88 workspace on Ubuntu,
+macOS 14 arm64 and Windows, including strict formatting, checking, tests, Clippy
+and dependency policy. This proves the bounded contracts, deterministic fixtures
+and tested CLI integrations in this repository; it does not prove production
+parity, general external behavior or containment of provider-native agents. The
+E04 exit condition, broader E08/E11 work, and E12 live-lab certification, artifact
+signing, published provenance/SBOMs and dependency automation remain open.
