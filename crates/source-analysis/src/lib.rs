@@ -1,4 +1,7 @@
-//! Deterministic full inventory, bounded chunks and merge-base-aware Git context.
+//! Deterministic inventory, bounded source context, conservative intra-file flows,
+//! and merge-base-aware Git context. Flow analysis is lexical—not compiler-grade
+//! or whole-program analysis—and never establishes exploitability by itself.
+pub mod flow;
 use anyhow::{bail, ensure, Context, Result};
 use domain::{Candidate, Proof, Severity};
 use regex::Regex;

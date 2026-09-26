@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "name": "account-role-comparison",
+  "roles": [
+    {
+      "role": "admin",
+      "plan": {
+        "schema_version": 1,
+        "name": "admin-account-observation",
+        "actor": "browser-admin",
+        "session": {
+          "browser": "chrome",
+          "headless": true,
+          "accept_insecure_certificates": false,
+          "additional_capabilities": {}
+        },
+        "steps": [
+          {"id": "open", "action": {"action": "navigate", "url": "https://app.example.test/login"}},
+          {"id": "password", "action": {"action": "fill", "locator": {"strategy": "name", "value": "password"}, "value": {"source": "environment", "name": "ROLE_PASSWORD"}}},
+          {"id": "capture", "action": {"action": "screenshot"}}
+        ]
+      },
+      "secret_bindings": {"ROLE_PASSWORD": {"resolver_key": "METISBLACK_ADMIN_PASSWORD"}}
+    },
+    {
+      "role": "viewer",
+      "plan": {
+        "schema_version": 1,
+        "name": "viewer-account-observation",
+        "actor": "browser-viewer",
+        "session": {
+          "browser": "chrome",
+          "headless": true,
+          "accept_insecure_certificates": false,
+          "additional_capabilities": {}
+        },
+        "steps": [
+          {"id": "open", "action": {"action": "navigate", "url": "https://app.example.test/login"}},
+          {"id": "password", "action": {"action": "fill", "locator": {"strategy": "name", "value": "password"}, "value": {"source": "environment", "name": "ROLE_PASSWORD"}}},
+          {"id": "capture", "action": {"action": "screenshot"}}
+        ]
+      },
+      "secret_bindings": {"ROLE_PASSWORD": {"resolver_key": "METISBLACK_VIEWER_PASSWORD"}}
+    }
+  ]
+}

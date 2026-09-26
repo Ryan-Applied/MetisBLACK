@@ -200,9 +200,10 @@ Depending on the mode, a run directory can contain:
 - `receipts/*.json` and `receipts-manifest.json`
 - `findings.json`, `report.json`, `report.md`, `report.html`, and `report.sarif`
 - `source-inventory.json`, `diff-context.json`, and an exported PR source snapshot
+- `source-flow-analysis.json` with bounded lexical paths and explicit limitations
 - provider-step records and account-cleanup state
-- `browser-plan-result.json`, private browser artifacts, and common browser receipts
-- `cloud-live-result.json`, verified identity/command audits, and common cloud receipts
+- `browser-plan-result.json` or `browser-authenticated-workflow-result.json`, private browser artifacts, and common browser receipts
+- `cloud-live-result.json`, `cloud-iam-graph.json`, verified identity/command audits, and common cloud receipts
 - `model-panel.json` with consensus, dissent, failures, and per-member budgets
 - `chains/*-checkpoint.json`, attack graphs, and disabled-template reasons
 

@@ -1,0 +1,22 @@
+project: "MetisBLACK"
+program: "P0-P2 production parity"
+last_updated: "2026-09-27T00:00:00+10:00"
+sprint: 1
+objective: "Establish reusable typed browser-role, source-flow, and cloud-IAM foundations"
+stories:
+  E01-S01:
+    file: "docs/stories/story-E01-S01.md"
+    status: "done"
+    owner: "browser-runtime swarm"
+  E02-S01:
+    file: "docs/stories/story-E02-S01.md"
+    status: "done"
+    owner: "source-analysis swarm"
+  E03-S01:
+    file: "docs/stories/story-E03-S01.md"
+    status: "done"
+    owner: "cloud-runtime swarm"
+  E12-S01:
+    file: "docs/stories/story-E12-S01.md"
+    status: "code-complete-awaiting-ci"
+    owner: "orchestrator"

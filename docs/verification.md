@@ -14,7 +14,7 @@ cargo clippy --workspace --all-targets --all-features --locked --offline -- -D w
 cargo test --workspace --all-features --locked --offline
 ```
 
-The final suite passed **125 tests**, with no failed or ignored tests. Coverage
+The current suite passed **148 tests**, with no failed or ignored tests. Coverage
 includes the exhaustive 32-control registry (default enforcement, exact override,
 unrelated-control isolation and unsafe-all), native provider HTTP tool calling,
 real tool receipts, independent replay, recon/specialist/reviewer/refuter scheduling,
@@ -34,12 +34,23 @@ report/history regeneration, malformed-path invariants, meaningful paired-contro
 isolation and saved-action banners. Network fixtures use loopback
 only; no public assessment target or real provider credential was used.
 
+The first production-parity tranche adds isolated authenticated multi-role browser
+sessions with role-local secret bindings and neutral comparison hashes; conservative
+language-aware lexical source flows that remain review-only; and deterministic,
+cycle-safe AWS/Azure/GCP IAM reachability whose traversable edges require common
+receipt lineage. Orchestrator tests cover source-flow state semantics and IAM artifact
+lineage, and the shipped browser-workflow example is schema-tested.
+
 The documented local demo completed at `runs/verified-demo`: two low-severity
 empirically confirmed missing-header observations, linked independent replay
 receipts, and Markdown/HTML/JSON/SARIF reports. This directory is ignored by Git.
 
 Legacy migration and validation both passed for 435 playbooks in seven categories.
 One incomplete-heading warning was retained for `meta/role_pentestfull`.
+
+CI now defines locked all-feature platform lanes for Ubuntu, macOS arm64 and
+Windows in addition to the strict Linux quality and dependency-policy jobs. These
+lanes remain configuration evidence until a remote GitHub run completes.
 
 Not executed locally: `cargo deny check` (cargo-deny is not installed), remote CI,
 live provider authentication, real provider-cloud accounts, a real WebDriver,

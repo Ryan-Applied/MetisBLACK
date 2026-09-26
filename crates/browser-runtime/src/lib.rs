@@ -24,6 +24,8 @@ use url::Url;
 
 mod plan;
 pub use plan::*;
+mod multi_role;
+pub use multi_role::*;
 
 pub const W3C_ELEMENT_KEY: &str = "element-6066-11e4-a52e-4f735466cecf";
 

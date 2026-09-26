@@ -35,3 +35,20 @@ and successful/failed command audits alongside `terminal_error`. The original
 `MockRunner` accepts an exact ordered sequence of `MockCall` values and exposes
 redacted observations of calls. It is intended for deterministic orchestration
 and receipt integration tests. The crate never installs or downloads a CLI.
+
+## IAM reachability
+
+`AdapterReport::from_observations` builds a provider-neutral
+`IamReachabilityGraph` from the normalized IAM records returned by a workflow.
+The graph has typed principal, role, group, resource, policy, and capability
+nodes. Confirmed edges retain their provider, authorizing account/subscription/
+project, source resources, and source command audit IDs.
+
+`reachable_from` and `shortest_path` are deterministic and cycle-safe. They
+traverse only evidence-complete edges. Missing evidence, unobserved group
+membership/effective capabilities, and unapproved cross-boundary candidates
+are retained as serialized `GraphGap` records and never participate in a path.
+The current adapters intentionally do not infer effective permissions from role
+names or acquire credentials. An AWS cross-account trust is accepted only when
+the observed source policy explicitly names the foreign principal; generic
+cross-boundary candidates are denied.

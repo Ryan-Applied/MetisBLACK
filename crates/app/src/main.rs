@@ -93,6 +93,9 @@ enum Command {
         allow_downloads: bool,
         #[arg(long)]
         plan: Option<PathBuf>,
+        /// Authenticated multi-role browser workflow JSON.
+        #[arg(long)]
+        workflow: Option<PathBuf>,
     },
     Whitebox {
         path: PathBuf,
@@ -413,6 +416,7 @@ async fn dispatch(cli: Cli) -> Result<i32> {
             allow_raw_javascript,
             allow_downloads,
             plan,
+            workflow,
             ..
         } => {
             config.browser = Some(BrowserRunConfig {
@@ -423,6 +427,7 @@ async fn dispatch(cli: Cli) -> Result<i32> {
                 allow_raw_javascript: *allow_raw_javascript,
                 allow_downloads: *allow_downloads,
                 plan: plan.clone(),
+                workflow: workflow.clone(),
             });
         }
         Command::Greybox { path, .. } => config.source_root = Some(path.clone()),

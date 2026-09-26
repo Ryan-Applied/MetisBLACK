@@ -1,16 +1,18 @@
 //! Shared application service: CLI, REPL and TUI invoke the same engine.
 use anyhow::{ensure, Context, Result};
 use browser_runtime::{
-    BrowserKind, BrowserObservation, BrowserPlan, BrowserPlanExecutor, BrowserPlanStatus,
-    BrowserRuntime, BrowserRuntimeConfig, BrowserStep, BrowserStepAction, CleanupOutcome,
-    SessionRequest, WebDriverHttpTransport, BROWSER_PLAN_SCHEMA_VERSION,
+    AuthenticatedBrowserWorkflow, AuthenticatedBrowserWorkflowExecutor,
+    AuthenticatedWorkflowStatus, BrowserKind, BrowserObservation, BrowserPlan, BrowserPlanExecutor,
+    BrowserPlanStatus, BrowserRuntime, BrowserRuntimeConfig, BrowserStep, BrowserStepAction,
+    CleanupOutcome, SessionRequest, WebDriverHttpTransport, BROWSER_PLAN_SCHEMA_VERSION,
 };
 use chain_engine::{
     builtin_catalog, ChainBudgets, ChainEngine, ObservedState, RiskLevel, RuntimeAdapter,
 };
 use cloud_runtime::{
-    CloudCredentials, CloudRuntime, CloudScope, CredentialContext, Provider as CloudProvider,
-    RuntimeOptions as CloudRuntimeOptions, SecretValue, SystemRunner,
+    AdapterReport, CloudCredentials, CloudRuntime, CloudScope, CredentialContext,
+    IamReachabilityGraph, Provider as CloudProvider, RuntimeOptions as CloudRuntimeOptions,
+    SecretValue, SystemRunner, WorkflowResult,
 };
 use domain::*;
 use evidence::EvidenceStore;
@@ -18,7 +20,10 @@ use policy::Policy;
 use providers::{Message, Provider, Requested};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use source_analysis::{DiffContext, Inventory};
+use source_analysis::{
+    flow::{FlowAnalysisConfig, FlowPath, FlowStatus, SinkKind},
+    DiffContext, Inventory,
+};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
@@ -45,6 +50,53 @@ pub struct LiveCloudCredentialPlan {
 pub struct LiveCloudPlan {
     pub scope: CloudScope,
     pub credentials: BTreeMap<String, LiveCloudCredentialPlan>,
+}
+
+pub const LIVE_CLOUD_IAM_SCHEMA_VERSION: u32 = 1;
+
+/// Derived IAM artifact. Graph edge audit IDs are mapped to immutable common
+/// receipt IDs so consumers can verify the provider observation behind every
+/// traversable relationship.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LiveCloudIamArtifact {
+    pub schema_version: u32,
+    pub source_observation_count: usize,
+    pub graph: IamReachabilityGraph,
+    pub audit_receipts: BTreeMap<String, String>,
+}
+
+fn live_cloud_iam_artifact(
+    result: &WorkflowResult,
+    audit_receipts: &BTreeMap<String, String>,
+) -> Result<LiveCloudIamArtifact> {
+    let report = AdapterReport::from_observations(&result.observations)
+        .map_err(|error| anyhow::anyhow!("cloud IAM graph construction failed: {error}"))?;
+    let referenced_audits = report
+        .graph
+        .edges
+        .values()
+        .flat_map(|edge| edge.evidence.source_audit_ids.iter())
+        .chain(
+            report
+                .graph
+                .gaps
+                .values()
+                .flat_map(|gap| gap.source_audit_ids.iter()),
+        )
+        .collect::<BTreeSet<_>>();
+    for audit_id in referenced_audits {
+        ensure!(
+            audit_receipts.contains_key(audit_id),
+            "cloud IAM relationship references audit without a common receipt: {audit_id}"
+        );
+    }
+    Ok(LiveCloudIamArtifact {
+        schema_version: LIVE_CLOUD_IAM_SCHEMA_VERSION,
+        source_observation_count: report.source_observation_count,
+        graph: report.graph,
+        audit_receipts: audit_receipts.clone(),
+    })
 }
 
 #[derive(Clone, Default)]
@@ -601,6 +653,63 @@ impl Engine {
             },
             self.control.cancel.clone(),
         )?;
+        if let Some(path) = &config.workflow {
+            let workflow: AuthenticatedBrowserWorkflow = read_json(path)?;
+            let result = AuthenticatedBrowserWorkflowExecutor::new(runtime)
+                .execute(&workflow)
+                .await?;
+            for role in &result.roles {
+                for observation in &role.result.observations {
+                    self.capture_browser_observation(target, observation)?;
+                }
+            }
+            write_json(
+                &self
+                    .snapshot
+                    .config
+                    .output_dir
+                    .join("browser-authenticated-workflow-result.json"),
+                &result,
+            )?;
+            let clean_roles = result
+                .roles
+                .iter()
+                .filter(|role| role.result.cleanup == CleanupOutcome::Closed)
+                .count();
+            self.snapshot.decisions.push(json!({
+                "action":"browser_authenticated_workflow",
+                "workflow":result.workflow_name,
+                "status":result.status,
+                "roles":result.roles.len(),
+                "clean_roles":clean_roles,
+                "comparison_hash":result.comparison.content_hash,
+                "observation_count":result.roles.iter().map(|role| role.result.observations.len()).sum::<usize>()
+            }));
+            self.snapshot.limitations.push(format!(
+                "Browser backend capabilities and limitations: {}",
+                browser_runtime::backend_limitations()
+            ));
+            return match result.status {
+                AuthenticatedWorkflowStatus::Completed if clean_roles == result.roles.len() => {
+                    Ok(())
+                }
+                AuthenticatedWorkflowStatus::Completed => anyhow::bail!(
+                    "authenticated browser workflow completed without closing every session"
+                ),
+                AuthenticatedWorkflowStatus::Cancelled => {
+                    self.control.cancel.store(true, Ordering::SeqCst);
+                    anyhow::bail!(
+                        "authenticated browser workflow cancelled after preserving observations"
+                    )
+                }
+                AuthenticatedWorkflowStatus::PartiallyFailed => anyhow::bail!(
+                    "authenticated browser workflow partially failed after session cleanup"
+                ),
+                AuthenticatedWorkflowStatus::Failed => {
+                    anyhow::bail!("authenticated browser workflow failed after session cleanup")
+                }
+            };
+        }
         let plan: BrowserPlan = if let Some(path) = &config.plan {
             read_json(path)?
         } else {
@@ -805,6 +914,11 @@ impl Engine {
                 .join("cloud-live-result.json"),
             &result,
         )?;
+        let iam_artifact = live_cloud_iam_artifact(&result, &audit_receipts)?;
+        write_json(
+            &self.snapshot.config.output_dir.join("cloud-iam-graph.json"),
+            &iam_artifact,
+        )?;
         for unsupported in &result.unsupported {
             self.snapshot.limitations.push(format!(
                 "Cloud capability unsupported for {} {}: {}",
@@ -815,6 +929,9 @@ impl Engine {
             "action":"live_cloud_workflow",
             "verified_identities":result.verified_identities,
             "observations":result.observations.len(),
+            "iam_nodes":iam_artifact.graph.nodes.len(),
+            "iam_edges":iam_artifact.graph.edges.len(),
+            "iam_gaps":iam_artifact.graph.gaps.len(),
             "unsupported":result.unsupported.len(),
             "terminal_error":terminal_error
         }));
@@ -1436,6 +1553,120 @@ impl Engine {
                 introduced,
             )
             .await?;
+        }
+        let flow_config = FlowAnalysisConfig {
+            max_paths: if self
+                .snapshot
+                .config
+                .overrides
+                .disables(Control::DataSampling)
+            {
+                100_000
+            } else {
+                self.snapshot.config.max_steps.max(1)
+            },
+            ..FlowAnalysisConfig::default()
+        };
+        let flow_analyses = source_analysis::flow::analyze_inventory_flows_with_overrides(
+            &inventory,
+            &flow_config,
+            &self.snapshot.config.overrides,
+        )?;
+        write_json(
+            &self
+                .snapshot
+                .config
+                .output_dir
+                .join("source-flow-analysis.json"),
+            &flow_analyses,
+        )?;
+        let request_remaining = if self
+            .snapshot
+            .config
+            .overrides
+            .disables(Control::RequestBudget)
+        {
+            usize::MAX
+        } else {
+            usize::try_from(
+                self.snapshot
+                    .config
+                    .scope
+                    .max_requests
+                    .saturating_sub(self.runtime.policy.usage().requests),
+            )?
+        };
+        let mut flow_paths_remaining = request_remaining / 2;
+        if !self
+            .snapshot
+            .config
+            .overrides
+            .disables(Control::DataSampling)
+        {
+            flow_paths_remaining = flow_paths_remaining.min(self.snapshot.config.max_steps);
+        }
+        'analyses: for analysis in &flow_analyses {
+            self.snapshot
+                .limitations
+                .extend(analysis.limitations.iter().map(|limitation| {
+                    format!("Source flow {}: {limitation}", analysis.path.display())
+                }));
+            for path in &analysis.paths {
+                if flow_paths_remaining == 0 {
+                    self.snapshot.limitations.push(
+                        "Additional source flows were not receipted because the source-flow action budget was exhausted."
+                            .into(),
+                    );
+                    break 'analyses;
+                }
+                if self.should_stop()? {
+                    return Ok(());
+                }
+                flow_paths_remaining -= 1;
+                let source = self
+                    .tool(
+                        "source-flow-source",
+                        ToolAction::SourceRead {
+                            path: path.source.point.path.clone(),
+                            start_line: path.source.point.line,
+                            end_line: path.source.point.end_line,
+                        },
+                    )
+                    .await?;
+                let sink = self
+                    .tool(
+                        "source-flow-sink",
+                        ToolAction::SourceRead {
+                            path: path.sink.point.path.clone(),
+                            start_line: path.sink.point.line,
+                            end_line: path.sink.point.end_line,
+                        },
+                    )
+                    .await?;
+                if !source.output.successful || !sink.output.successful {
+                    self.snapshot
+                        .limitations
+                        .push(format!("Source flow receipt failed for {}", path.id));
+                    continue;
+                }
+                let introduced = diff.as_ref().map(|context| {
+                    let relative = path
+                        .source
+                        .point
+                        .path
+                        .strip_prefix(&root)
+                        .unwrap_or(&path.source.point.path)
+                        .to_string_lossy();
+                    context.introduced(&relative, path.source.point.line)
+                        || context.introduced(&relative, path.sink.point.line)
+                });
+                self.add_candidate(
+                    source_flow_candidate(path, vec![source.id, sink.id]),
+                    "deterministic-source-flow",
+                    introduced,
+                )
+                .await?;
+            }
         }
         if self.snapshot.config.mode == Mode::Greybox {
             let re = regex::Regex::new(r#"(?:\.get\(|route\()\s*["'](/[^"']*)["']"#)?;
@@ -2505,6 +2736,91 @@ fn cloud_severity(value: cloud_runtime::FindingSeverity) -> Severity {
     }
 }
 
+fn source_flow_candidate(path: &FlowPath, receipt_ids: Vec<String>) -> Candidate {
+    let (label, severity, cwe, impact, remediation) = match path.sink.kind {
+        SinkKind::Sql => (
+            "SQL",
+            Severity::Medium,
+            "CWE-89",
+            "If the lexical path is runtime-reachable without effective parameterization, an attacker may influence a database query.",
+            "Use parameterized queries and verify the complete runtime call path.",
+        ),
+        SinkKind::Command => (
+            "command",
+            Severity::Medium,
+            "CWE-78",
+            "If runtime-reachable without an effective argument boundary, an attacker may influence process execution.",
+            "Avoid shell construction, use fixed executables and typed arguments, and validate the full runtime path.",
+        ),
+        SinkKind::File => (
+            "file",
+            Severity::Low,
+            "CWE-22",
+            "If runtime-reachable without canonical path enforcement, an attacker may influence filesystem access.",
+            "Resolve against an allowed root and enforce canonical path boundaries.",
+        ),
+        SinkKind::Request => (
+            "outbound request",
+            Severity::Low,
+            "CWE-918",
+            "If runtime-reachable without destination validation, an attacker may influence an outbound request.",
+            "Allowlist destinations and revalidate resolved addresses and redirects.",
+        ),
+        SinkKind::Eval => (
+            "dynamic evaluation",
+            Severity::Medium,
+            "CWE-95",
+            "If runtime-reachable, attacker-controlled input may reach dynamic evaluation.",
+            "Remove dynamic evaluation or replace it with a constrained typed interpreter.",
+        ),
+    };
+    Candidate {
+        title: format!("Potential HTTP-input to {label} flow"),
+        description: format!(
+            "A bounded lexical trace connects {:?} at {}:{} to {:?} at {}:{}. {}",
+            path.source.kind,
+            path.source.point.path.display(),
+            path.source.point.line,
+            path.sink.kind,
+            path.sink.point.path.display(),
+            path.sink.point.line,
+            path.limitation
+        ),
+        severity,
+        severity_justification: "Severity is provisional because lexical flow does not prove runtime reachability, missing sanitization, or exploitability.".into(),
+        cvss: None,
+        cwe: vec![cwe.into()],
+        owasp: vec![],
+        mitre: vec![],
+        location: format!(
+            "{}:{} -> {}:{}",
+            path.source.point.path.display(),
+            path.source.point.line,
+            path.sink.point.path.display(),
+            path.sink.point.line
+        ),
+        payload: String::new(),
+        impact: impact.into(),
+        remediation: remediation.into(),
+        confidence: if path.status == FlowStatus::Traceable {
+            0.65
+        } else {
+            0.4
+        },
+        auth_context: "source review".into(),
+        test_identity: None,
+        receipt_ids,
+        screenshots: vec![],
+        chains_from: vec![],
+        proof: Proof::Manual {
+            procedure: format!(
+                "Review lexical flow {}, establish framework/runtime reachability and sanitization, then reproduce with the smallest authorized safe input.",
+                path.id
+            ),
+        },
+    }
+}
+
 pub fn default_config(mode: Mode, targets: Vec<String>, output_dir: PathBuf) -> Result<RunConfig> {
     let mut scope = Scope::default();
     if mode == Mode::Ai {
@@ -2574,6 +2890,35 @@ pub async fn local_demo(output: &Path) -> Result<RunSnapshot> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn live_cloud_iam_artifact_requires_common_receipt_lineage() -> Result<()> {
+        let mut result = WorkflowResult::default();
+        result.observations.push(cloud_runtime::Observation {
+            provider: CloudProvider::Aws,
+            scope_id: "111111111111".into(),
+            location: None,
+            service: "iam".into(),
+            resource_type: "iam_role".into(),
+            resource_id: "arn:aws:iam::111111111111:role/Audit".into(),
+            name: "Audit".into(),
+            configuration: json!({"RoleName":"Audit"}),
+            iam: vec![cloud_runtime::IamBinding {
+                role: "Audit".into(),
+                principal: "arn:aws:iam::111111111111:user/alice".into(),
+                condition: None,
+            }],
+            source_audit_id: "audit-1".into(),
+        });
+        assert!(live_cloud_iam_artifact(&result, &BTreeMap::new()).is_err());
+        let receipts = BTreeMap::from([("audit-1".into(), "receipt-1".into())]);
+        let artifact = live_cloud_iam_artifact(&result, &receipts)?;
+        assert_eq!(artifact.schema_version, LIVE_CLOUD_IAM_SCHEMA_VERSION);
+        assert_eq!(artifact.source_observation_count, 1);
+        assert_eq!(artifact.audit_receipts, receipts);
+        assert_eq!(artifact.graph.edges.len(), 3);
+        Ok(())
+    }
+
     #[test]
     fn azure_live_scope_uses_runtime_canonical_identity() {
         let scope = CloudScope::Azure {
@@ -2656,6 +3001,31 @@ mod tests {
         assert_eq!(run.findings.len(), 1);
         assert_eq!(run.findings[0].state, FindingState::Confirmed);
         assert!(run.findings[0].candidate.location.ends_with("a.py:2"));
+        Ok(())
+    }
+    #[tokio::test]
+    async fn whitebox_flow_stays_review_only_and_receipt_backed() -> Result<()> {
+        let source = tempfile::tempdir()?;
+        std::fs::write(
+            source.path().join("app.py"),
+            "value = request.args.get('q')\nquery = 'SELECT * FROM users WHERE name=' + value\ncursor.execute(query)\n",
+        )?;
+        let out = tempfile::tempdir()?;
+        let config = default_config(
+            Mode::Whitebox,
+            vec![source.path().display().to_string()],
+            out.path().into(),
+        )?;
+        let run = Engine::new(config)?.run().await?;
+        let flow = run
+            .findings
+            .iter()
+            .find(|finding| finding.finder == "deterministic-source-flow")
+            .context("source flow finding missing")?;
+        assert_eq!(flow.state, FindingState::NeedsReview);
+        assert_eq!(flow.candidate.receipt_ids.len(), 2);
+        assert!(matches!(flow.candidate.proof, Proof::Manual { .. }));
+        assert!(out.path().join("source-flow-analysis.json").exists());
         Ok(())
     }
     #[tokio::test]

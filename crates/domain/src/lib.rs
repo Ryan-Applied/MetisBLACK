@@ -635,6 +635,9 @@ pub struct BrowserRunConfig {
     pub allow_downloads: bool,
     #[serde(default)]
     pub plan: Option<PathBuf>,
+    /// Authenticated multi-role workflow. Mutually exclusive with `plan`.
+    #[serde(default)]
+    pub workflow: Option<PathBuf>,
 }
 fn default_browser_kind() -> String {
     "chrome".into()
@@ -769,6 +772,10 @@ impl RunConfig {
             ensure!(
                 ["chrome", "firefox", "safari", "compatible"].contains(&browser.browser.as_str()),
                 "unsupported browser kind"
+            );
+            ensure!(
+                browser.plan.is_none() || browser.workflow.is_none(),
+                "browser plan and authenticated workflow are mutually exclusive"
             );
         }
         if self.mode == Mode::CloudLive {

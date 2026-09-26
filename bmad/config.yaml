@@ -1,0 +1,20 @@
+# BMAD Method v6 project configuration.
+# MetisBLACK is an existing Level 4 security-assessment platform expansion.
+bmad_version: "6.0.0"
+project_name: "MetisBLACK"
+project_type: "other"
+project_level: 4
+output_folder: "docs"
+stories_folder: "docs/stories"
+communication_language: "English"
+document_output_language: "English"
+agent_overrides_folder: "bmad/agent-overrides"
+auto_update_status: true
+git_integration: true
+project_description: "Receipt-backed, policy-enforced security assessment platform"
+repository_url: "https://github.com/Ryan-Applied/MetisBLACK.git"
+tech_stack:
+  - "Rust"
+  - "W3C WebDriver"
+  - "AWS, Azure, and GCP CLIs"
+  - "OpenAI, Anthropic, Gemini, Ollama, and llama.cpp providers"

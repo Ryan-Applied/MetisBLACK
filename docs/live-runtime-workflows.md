@@ -48,6 +48,29 @@ the `external-downloads` expert override. Raw JavaScript requires
 interception; discovered subresource scope escapes are detected from performance
 logs and quarantine the session.
 
+For role-separated authorization evidence, pass the versioned workflow in
+`examples/browser-authenticated-workflow.json` with `--workflow` instead of
+`--plan`. Each role gets a new session and a distinct mapping from logical plan
+secret names to runtime resolver keys:
+
+```bash
+export METISBLACK_ADMIN_PASSWORD='from-a-secret-store'
+export METISBLACK_VIEWER_PASSWORD='from-a-secret-store'
+metisblack browser https://app.example.test \
+  --webdriver http://127.0.0.1:9515 \
+  --workflow examples/browser-authenticated-workflow.json \
+  --authorize --output runs/browser-roles \
+  --override state_changes \
+  --override-actor assessor@example.test \
+  --override-reason "authorized role-login workflow" \
+  --acknowledge-unsafe
+```
+
+An engagement config can set a finite `scope.max_state_changes` instead of using
+the explicit override. The saved comparison contains role labels and observation/
+artifact hashes only. It is evidence for a later authorization correlator, not an
+automatic IDOR or privilege-boundary verdict.
+
 ## Live cloud workflows
 
 The cloud runtime invokes installed provider CLIs with direct argv (never a
@@ -90,8 +113,11 @@ metisblack cloud-live cloud-plan.json --authorize --output runs/cloud-live
 
 Equivalent typed scopes exist for Azure subscriptions and GCP projects. Results
 include verified identities, normalized assets/IAM, command audits, unsupported
-capabilities, common receipts, and review candidates. Identity mismatch stops
-enumeration.
+capabilities, common receipts, review candidates, and `cloud-iam-graph.json`.
+Only IAM relationships whose provider audit IDs resolve to immutable common
+receipts are traversable. Missing effective permissions, group membership and
+unapproved boundary crossings remain explicit non-traversable gaps. Identity
+mismatch stops enumeration.
 
 ## Heterogeneous model validation
 

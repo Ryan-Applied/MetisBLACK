@@ -1,0 +1,48 @@
+project_name: "MetisBLACK"
+project_type: "other"
+project_level: 4
+communication_language: "English"
+output_language: "English"
+last_updated: "2026-09-27T00:00:00+10:00"
+
+workflow_status:
+  - name: "product-brief"
+    phase: 1
+    status: "docs/product-requirements.md"
+    description: "Product contract, supported modes, and assurance invariants"
+  - name: "research"
+    phase: 1
+    status: "docs/current-platform-analysis.md"
+    description: "Legacy implementation and parity research"
+  - name: "prd"
+    phase: 2
+    status: "docs/product-requirements.md"
+    description: "Production parity requirements"
+  - name: "ux-design"
+    phase: 2
+    status: "docs/operator-experience.md"
+    description: "Operator workflows for CLI, TUI, REPL, reports, and integrations"
+  - name: "architecture"
+    phase: 3
+    status: "docs/architecture.md"
+    description: "Trust-boundary and component architecture"
+  - name: "solutioning-gate-check"
+    phase: 3
+    status: "docs/solutioning-gate-check.md"
+    description: "Requirement coverage and production-readiness gate"
+  - name: "sprint-planning"
+    phase: 4
+    status: "docs/parity-roadmap.md"
+    description: "P0-P2 parity epics, acceptance gates, and ordering"
+  - name: "create-story"
+    phase: 4
+    status: "docs/stories"
+    description: "Incremental implementation stories"
+  - name: "dev-story"
+    phase: 4
+    status: "required"
+    description: "Implementation remains active until every parity gate passes"
+  - name: "code-review"
+    phase: 4
+    status: "required"
+    description: "Required for every completed production-parity story"

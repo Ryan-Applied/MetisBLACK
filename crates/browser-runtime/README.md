@@ -48,3 +48,42 @@ For deterministic recovery, `BrowserPlan::checkpoint` authenticates a completed
 prefix against the plan fingerprint. `execute_with_checkpoint` replays that
 prefix in a new session to reconstruct browser state; stale cookies and element
 handles are never trusted across runs.
+
+## Authenticated multi-role workflows
+
+`AuthenticatedBrowserWorkflowExecutor` composes multiple named
+`AuthenticatedRolePlan` values over one runtime. It validates all roles before
+starting a session, sorts roles by name for deterministic aggregate ordering,
+and runs every role plan in a fresh WebDriver session. A failed role is cleaned
+up and recorded without suppressing later roles. All roles share the runtime's
+policy budgets and cancellation flag; cancellation quarantines the active
+session, and later roles return cancelled/session-not-created outcomes without
+opening new sessions.
+
+Within an authenticated role plan, `PlanValue::Environment` and
+`PlanArgument::Environment` names are logical names. Each must have exactly one
+`RoleSecretBinding`, whose `resolver_key` is handed to the executor's runtime
+`SecretResolver`. The default resolver treats that key as an environment
+variable name; a caller can inject a vault-backed resolver with
+`AuthenticatedBrowserWorkflowExecutor::with_secret_resolver`. Binding keys are
+serialized, but resolved values are not. Resolver keys must also be distinct
+between roles to prevent an accidental same-identity comparison.
+
+This stricter layer rejects public inline values for form input, Web Storage,
+and cookies; credential-bearing URLs, capability fields, and JavaScript are also
+rejected. Public JavaScript arguments may contain non-string JSON scalars, but
+all string arguments must use role bindings. Non-secret public workflow data
+should be expressed as navigation, locators, or other typed plan structure
+rather than credential-like strings.
+
+The aggregate `AuthenticatedBrowserWorkflowResult` contains ordered per-role
+plan results and a hash-addressed `NeutralRoleComparisonRecord`. That comparison
+record holds only role labels, immutable observation content hashes, and
+artifact hashes. It intentionally makes no IDOR, authorization-equivalence,
+vulnerability, confidence, or severity claim; a later correlator must retrieve
+and evaluate the referenced observations under its own evidence policy.
+
+To connect orchestration cancellation, construct the runtime with
+`BrowserRuntime::new_with_cancellation(..., shared_arc_atomic_bool)` and pass it
+to the authenticated workflow executor. Existing `BrowserRuntime::new` remains
+available for standalone callers and creates a private cancellation flag.
