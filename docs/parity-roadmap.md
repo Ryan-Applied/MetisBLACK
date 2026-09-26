@@ -34,7 +34,7 @@ A capability is complete only when all applicable gates pass:
 | E04 | P0 | Black-box discovery and web validation | Bounded crawl/API/schema discovery and typed, replayable validation modules for prioritized web vulnerability classes | In progress |
 | E05 | P0 | Host, Windows and Active Directory | Protocol-aware discovery, credentialed SSH/WinRM/SMB/LDAP inspection, AD relationships and safe replay | Planned |
 | E06 | P0 | AI, MCP and workflow assessment | Multi-turn scenario runner, attacker/judge separation, canaries, tool/RAG/MCP surfaces and reproducible verdicts | Planned |
-| E07 | P0 | Attack-chain breadth | Verified primitive registry, evidence-backed dynamic DAGs, loot propagation, typed adapters and cleanup | Planned |
+| E07 | P0 | Attack-chain breadth | Verified primitive registry, evidence-backed dynamic DAGs, loot propagation, typed adapters and cleanup | In progress: E07-S01 now has checkpoint-scoped single-writer execution, durable primary/replay/cleanup intents, exact operation-bound receipt recovery, typed dispatch ambiguity, semantic replay, cleanup preflight and indeterminate quarantine; typed loot, dynamic materialization, full lifecycle retest/reporting and live-lab certification remain |
 | E08 | P1 | Provider and swarm platform | Subscription CLIs, provider breadth, streaming, reasoning controls, native cost telemetry, routing and durable workers | In progress: E08-S01 adds audited Claude/Codex subscription transports, explicit autonomous modes, durable pre-spawn intents, exact-receipt recovery and failure-closed panel integration; Gemini/Grok, streaming, durable distributed workers and broader telemetry remain |
 | E09 | P1 | SDLC integrations | Remote PR/MR fetch, private clone, reviews, status gates, branch watch, Jira issues and mention automation | Planned |
 | E10 | P1 | Operator experience and reports | Natural-language REPL, production TUI, project memory, proxies, targeted retest, PDF/Typst and evidence bundles | Planned |
@@ -75,13 +75,13 @@ reasoning controls and complete native cost telemetry remain open.
 
 ## Current verification baseline
 
-The current locked repository baseline is 311 passing non-ignored local tests.
+The current locked repository baseline is 331 passing non-ignored local tests.
 Two authenticated subscription probes are ignored by the fixture matrix and were
 run separately against Claude Code `2.1.283` and Codex CLI `0.147.0`; both passed
 in unrestricted mode with their exact dangerous flags. Formatting, all-target and
 all-feature checking, strict Clippy and the optimized build pass locally. The local
 macOS arm64 `metisblack 0.1.0` artifact has SHA-256
-`8594d65c7f75171bc3c1dac64139bb0b55ba0365c4e6d25af09c53632b9f48d8`.
+`7f94f8d970c2c9d693f884ea1271bd1abdbe38f2267a9553b87e78678f4c0086`.
 
 GitHub Actions run
 [`36277987141`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36277987141)

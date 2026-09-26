@@ -98,7 +98,11 @@ Completed in this slice:
   addressed and the complete matrix was rerun.
 - The locked optimized `metisblack 0.1.0` macOS arm64 build completed with
   SHA-256 `8594d65c7f75171bc3c1dac64139bb0b55ba0365c4e6d25af09c53632b9f48d8`.
+- Final-head GitHub Actions run
+  [`36277987141`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36277987141)
+  passes the strict quality and dependency-policy jobs plus locked Rust 1.88
+  tests on Ubuntu, macOS 14 arm64 and Windows for commit `6f45b98`.
 
-The story remains in progress until final-head CI passes and the broader E08/E11
-items listed above are implemented. Unrestricted live prompts remain opt-in and
-require the exact audited override bundle or `unsafe_all`.
+The story remains in progress because the broader E08/E11 items listed above are
+not implemented. Unrestricted live prompts remain opt-in and require the exact
+audited override bundle or `unsafe_all`.

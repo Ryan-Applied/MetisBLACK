@@ -1,8 +1,8 @@
 project: "MetisBLACK"
 program: "P0-P2 production parity"
 last_updated: "2026-09-27T00:00:00+10:00"
-sprint: 3
-objective: "Add audited autonomous subscription-CLI providers without treating native agent activity as trusted evidence"
+sprint: 4
+objective: "Build receipt-bound dynamic chains without repeat-on-restart or transport-only proof"
 stories:
   E01-S01:
     file: "docs/stories/story-E01-S01.md"
@@ -28,6 +28,10 @@ stories:
     file: "docs/stories/story-E04-S03.md"
     status: "done"
     owner: "api-validation swarm"
+  E07-S01:
+    file: "docs/stories/story-E07-S01.md"
+    status: "in-progress"
+    owner: "chain-engine swarm"
   E08-S01:
     file: "docs/stories/story-E08-S01.md"
     status: "in-progress"

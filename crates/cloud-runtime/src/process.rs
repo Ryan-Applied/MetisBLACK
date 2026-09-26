@@ -219,6 +219,7 @@ impl CommandRunner for SystemRunner {
         let mut child = command
             .spawn()
             .map_err(|error| CloudError::Process(error.to_string()))?;
+        let execution_started = Instant::now();
         let stdout = child
             .stdout
             .take()
@@ -239,13 +240,13 @@ impl CommandRunner for SystemRunner {
                 let _ = child.kill();
                 break child.wait();
             }
-            if started.elapsed() >= spec.timeout {
-                timed_out = true;
-                let _ = child.kill();
-                break child.wait();
-            }
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
+                Ok(None) if execution_started.elapsed() >= spec.timeout => {
+                    timed_out = true;
+                    let _ = child.kill();
+                    break child.wait();
+                }
                 Ok(None) => thread::sleep(Duration::from_millis(10)),
                 Err(error) => break Err(error),
             }
@@ -411,6 +412,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("fake-cloud");
+        let shell_marker = directory.path().join("shell-was-invoked");
         fs::write(&executable, "#!/bin/sh\nprintf 1234567890\n").unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
         let runner = SystemRunner::new(vec![directory.path().to_path_buf()]);
@@ -418,15 +420,22 @@ mod tests {
         let spec = CommandSpec::new(
             Operation::AwsVersion,
             probe.resolved,
-            vec!["--version".into(), "; touch /tmp/never".into()],
+            vec![
+                "--version".into(),
+                format!("; touch {}", shell_marker.display()),
+            ],
             BTreeMap::new(),
-            Duration::from_secs(2),
+            Duration::from_secs(30),
             4,
             CancellationToken::default(),
         );
         let output = runner.run(&spec).unwrap();
+        assert_eq!(output.exit_code, Some(0));
+        assert!(!output.timed_out);
         assert_eq!(output.stdout, "1234");
+        assert_eq!(output.stdout_bytes, 10);
         assert!(output.stdout_truncated);
+        assert!(!shell_marker.exists());
     }
 
     #[cfg(unix)]

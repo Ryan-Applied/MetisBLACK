@@ -14,7 +14,9 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace --all-features
 ```
 
-The current suite passed **271 tests**, with no failed or ignored tests. Coverage
+The current locked suite passed **331 non-ignored tests**, with no failures. Two
+authenticated subscription-CLI probes are deliberately ignored by the fixture
+matrix and were run separately. Coverage
 includes the exhaustive 32-control registry (default enforcement, exact override,
 unrelated-control isolation and unsafe-all), native provider HTTP tool calling,
 real tool receipts, independent replay, recon/specialist/reviewer/refuter scheduling,
@@ -58,6 +60,23 @@ rejection, explicit one-shot retry, exact status/media/violation replay, and
 normal-report lineage and omission records. These tests use owned loopback fixtures;
 they do not certify interoperability with a public API or real framework.
 
+The E08-S01 provider-runtime acceptance adds fixed direct-argv Claude Code and
+Codex subscription transports, bounded machine-output parsing, environment and
+credential isolation, executable/version/hash binding, exact dangerous-flag
+gating, durable invocation intents, no-repeat ambiguous recovery and exclusion of
+native agent activity from target evidence. The two opt-in authenticated probes
+passed against Claude Code `2.1.283` and Codex CLI `0.147.0` in unrestricted mode;
+their canonical executable targets and hashes are recorded in the E08 story.
+
+The E07-S01 chain-safety tranche adds checkpoint-scoped single-writer execution,
+durable primary/replay/cleanup intents, exact current-run/actor/action/operation
+receipt binding, typed not-dispatched versus outcome-unknown adapter failures,
+semantic replay predicates, cleanup policy/capability/risk/state preflight,
+cancellation-safe scheduling and quarantine recovery without repeated adapter I/O.
+Twenty-nine chain-engine fixtures cover the new failure boundaries. This is the
+safe execution substrate; typed loot, dynamic materialization, complete lifecycle
+retest/reporting and live-lab interoperability remain open.
+
 The documented local demo completed at `runs/verified-demo`: two low-severity
 empirically confirmed missing-header observations, linked independent replay
 receipts, and Markdown/HTML/JSON/SARIF reports. This directory is ignored by Git.
@@ -68,17 +87,17 @@ One incomplete-heading warning was retained for `meta/role_pentestfull`.
 CI defines locked all-feature platform lanes for Ubuntu, macOS 14 arm64 and
 Windows in addition to the strict quality and dependency-policy jobs. GitHub
 Actions run
-[`36273283530`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36273283530)
-passed all five jobs from E04-S03 acceptance commit `8c146ad` using the declared
-Rust 1.88 MSRV. This includes locked tests on Ubuntu, macOS 14 arm64 and Windows,
-the strict format/check/test/Clippy lane, and dependency policy.
+[`36277987141`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36277987141)
+passed all five jobs from final-head commit `6f45b98` using the declared Rust 1.88
+MSRV. This includes locked tests on Ubuntu, macOS 14 arm64 and Windows, the strict
+format/check/test/Clippy lane, and dependency policy.
 
 Not executed locally: `cargo deny check` (cargo-deny is not installed), live
-provider authentication, real provider-cloud accounts, a real WebDriver,
-authenticated application workflows, or broad real-target exploit reproduction.
-The live backends are therefore implementation- and mock-verified, not
-environment-certified. See `implementation-status.md` for the precise capability
-boundary.
+provider-cloud accounts, a real WebDriver, authenticated application workflows,
+or broad real-target exploit reproduction. Except for the two exact subscription
+CLI probes above, live backends are therefore implementation- and mock-verified,
+not environment-certified. See `implementation-status.md` for the precise
+capability boundary.
 
 The outer repository's tracked files remain unchanged. `MetisBLACK/` is published
 as its own repository root, where the nested workflow is active.

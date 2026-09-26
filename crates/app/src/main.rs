@@ -178,7 +178,7 @@ enum Command {
     },
     Resume {
         run_dir: PathBuf,
-        /// Explicitly allow a failed browser/cloud/panel/API stage to repeat I/O once.
+        /// Explicitly allow a failed browser/cloud/panel/API or validation stage to repeat I/O once.
         #[arg(long)]
         retry_failed_stages: bool,
     },

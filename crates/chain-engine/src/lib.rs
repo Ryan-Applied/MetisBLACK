@@ -19,7 +19,52 @@ use std::{
 };
 use storage::hash;
 
-pub type ReceiptFuture<'a> = Pin<Box<dyn Future<Output = Result<Receipt>> + Send + 'a>>;
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchClassification {
+    NotDispatched,
+    OutcomeUnknown,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdapterDispatchError {
+    pub classification: DispatchClassification,
+    pub message: String,
+}
+impl AdapterDispatchError {
+    pub fn not_dispatched(message: impl Into<String>) -> Self {
+        Self {
+            classification: DispatchClassification::NotDispatched,
+            message: message.into(),
+        }
+    }
+    pub fn outcome_unknown(message: impl Into<String>) -> Self {
+        Self {
+            classification: DispatchClassification::OutcomeUnknown,
+            message: message.into(),
+        }
+    }
+}
+impl std::fmt::Display for AdapterDispatchError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{}", self.message)
+    }
+}
+impl std::error::Error for AdapterDispatchError {}
+
+/// Exact adapter-side execution binding. External adapters must embed this
+/// object in their sealed receipt data under `metisblack_execution_binding`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AdapterExecutionBinding {
+    pub intent_id: String,
+    pub operation_fingerprint: String,
+}
+
+pub type ReceiptFuture<'a> =
+    Pin<Box<dyn Future<Output = std::result::Result<Receipt, AdapterDispatchError>> + Send + 'a>>;
+pub type ReceiptInventoryFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Vec<Receipt>>> + Send + 'a>>;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "snake_case")]
@@ -92,12 +137,73 @@ impl Default for StepRequirements {
 pub struct ReplayGate {
     pub required: bool,
     pub independent_actor: String,
+    /// Typed semantics that both primary and independent replay receipts must
+    /// satisfy. The default preserves the historical success-only behavior.
+    #[serde(default, skip_serializing_if = "ReplayPredicate::is_default")]
+    pub predicate: ReplayPredicate,
 }
 impl Default for ReplayGate {
     fn default() -> Self {
         Self {
             required: false,
             independent_actor: "chain-independent-replay".into(),
+            predicate: ReplayPredicate::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields, tag = "kind", rename_all = "snake_case")]
+pub enum ReplayPredicate {
+    Successful {},
+    JsonPointerEquals { pointer: String, expected: Value },
+}
+impl Default for ReplayPredicate {
+    fn default() -> Self {
+        Self::Successful {}
+    }
+}
+impl ReplayPredicate {
+    fn is_default(&self) -> bool {
+        matches!(self, Self::Successful {})
+    }
+
+    fn validate(&self) -> Result<()> {
+        if let Self::JsonPointerEquals { pointer, expected } = self {
+            ensure!(
+                pointer.is_empty() || pointer.starts_with('/'),
+                "replay JSON pointer must be empty or start with /"
+            );
+            ensure!(
+                pointer.len() <= 1_024,
+                "replay JSON pointer exceeds 1024-byte limit"
+            );
+            ensure!(
+                pointer
+                    .as_bytes()
+                    .iter()
+                    .enumerate()
+                    .all(|(index, byte)| *byte != b'~'
+                        || matches!(pointer.as_bytes().get(index + 1), Some(b'0' | b'1'))),
+                "replay JSON pointer contains an invalid escape"
+            );
+            ensure!(
+                serde_json::to_vec(expected)?.len() <= 65_536,
+                "replay expected value exceeds 65536-byte limit"
+            );
+        }
+        Ok(())
+    }
+
+    fn matches(&self, receipt: &Receipt) -> bool {
+        if !receipt.output.successful {
+            return false;
+        }
+        match self {
+            Self::Successful {} => true,
+            Self::JsonPointerEquals { pointer, expected } => {
+                receipt.output.data.pointer(pointer) == Some(expected)
+            }
         }
     }
 }
@@ -106,6 +212,13 @@ impl Default for ReplayGate {
 pub struct CleanupSpec {
     pub operation: StepOperation,
     pub description: String,
+    /// Cleanup is executable only when the author explicitly asserts that
+    /// repeating it is safe. Missing legacy input is not proof of idempotence.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub idempotent: bool,
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -192,6 +305,25 @@ impl ChainTemplate {
         ensure!(ids.len() == self.steps.len(), "duplicate chain step id");
         for step in &self.steps {
             ensure!(!step.id.trim().is_empty(), "empty step id");
+            step.replay.predicate.validate()?;
+            ensure!(
+                !step.replay.required || !step.replay.independent_actor.trim().is_empty(),
+                "required replay needs an independent actor"
+            );
+            ensure!(
+                !step.replay.required || step.replay.independent_actor != "chain-primary",
+                "replay actor must differ from the primary actor"
+            );
+            // Actor labels provide deterministic separation today. Strong
+            // authenticated-principal separation remains a future adapter
+            // contract and is not inferred from distinct strings.
+            if let Some(cleanup) = &step.cleanup {
+                ensure!(cleanup.idempotent, "cleanup operation must be idempotent");
+                ensure!(
+                    !cleanup.description.trim().is_empty(),
+                    "cleanup operation requires a description"
+                );
+            }
             ensure!(
                 step.requirements
                     .scope_targets
@@ -272,6 +404,26 @@ impl ChainTemplate {
             }
             if let Err(error) = policy.check_action(step.operation.receipt_action()) {
                 reasons.push(format!("step {} denied by policy: {error}", step.id));
+            }
+            if step.requirements.state_change && step.cleanup.is_none() {
+                reasons.push(format!(
+                    "step {} changes state but has no authored idempotent cleanup",
+                    step.id
+                ));
+            }
+            if let Some(cleanup) = &step.cleanup {
+                if !cleanup.idempotent {
+                    reasons.push(format!(
+                        "step {} cleanup is not explicitly idempotent",
+                        step.id
+                    ));
+                }
+                if let Err(error) = policy.check_action(cleanup.operation.receipt_action()) {
+                    reasons.push(format!(
+                        "step {} cleanup denied by policy: {error}",
+                        step.id
+                    ));
+                }
             }
         }
         Eligibility {
@@ -375,12 +527,18 @@ pub enum StepStatus {
     FailedPolicy,
     FailedExecution,
     FailedReplay,
+    /// Adapter I/O may have happened, but no unique sealed receipt can prove
+    /// its outcome. The operation is deliberately never repeated.
+    Indeterminate,
     Unsupported,
     Cancelled,
 }
 impl StepStatus {
     fn success(self) -> bool {
         matches!(self, Self::Succeeded | Self::Reused)
+    }
+    fn terminal(self) -> bool {
+        !matches!(self, Self::Pending | Self::Running)
     }
 }
 
@@ -404,6 +562,103 @@ pub struct RollbackRecord {
     pub message: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionPhase {
+    Primary,
+    Replay,
+    Cleanup,
+}
+impl ExecutionPhase {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Primary => "primary",
+            Self::Replay => "replay",
+            Self::Cleanup => "cleanup",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IntentResolution {
+    Executed,
+    Recovered,
+    Indeterminate,
+    Ambiguous,
+    Rejected,
+    NotDispatched,
+}
+
+/// Durable write-ahead record for exactly one adapter interaction.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StepExecutionIntent {
+    pub intent_id: String,
+    pub run_id: String,
+    pub template_hash: String,
+    pub step_id: String,
+    pub phase: ExecutionPhase,
+    pub actor: String,
+    pub operation_fingerprint: String,
+    pub prior_receipt_ids: Vec<String>,
+    pub created_ms: u64,
+    pub resolution: Option<IntentResolution>,
+    pub receipt_id: Option<String>,
+    pub resolved_ms: Option<u64>,
+}
+impl StepExecutionIntent {
+    fn new(
+        run_id: &str,
+        template_hash: &str,
+        step_id: &str,
+        phase: ExecutionPhase,
+        actor: &str,
+        operation_fingerprint: String,
+        mut prior_receipt_ids: Vec<String>,
+    ) -> Result<Self> {
+        prior_receipt_ids.sort();
+        prior_receipt_ids.dedup();
+        let created_ms = now_ms();
+        let mut intent = Self {
+            intent_id: String::new(),
+            run_id: run_id.into(),
+            template_hash: template_hash.into(),
+            step_id: step_id.into(),
+            phase,
+            actor: actor.into(),
+            operation_fingerprint,
+            prior_receipt_ids,
+            created_ms,
+            resolution: None,
+            receipt_id: None,
+            resolved_ms: None,
+        };
+        intent.intent_id = format!("intent-{}", intent.binding_hash()?);
+        Ok(intent)
+    }
+
+    fn binding_hash(&self) -> Result<String> {
+        Ok(hash(&serde_json::to_vec(&json!({
+            "run_id": self.run_id,
+            "template_hash": self.template_hash,
+            "step_id": self.step_id,
+            "phase": self.phase,
+            "actor": self.actor,
+            "operation_fingerprint": self.operation_fingerprint,
+            "prior_receipt_ids": self.prior_receipt_ids,
+            "created_ms": self.created_ms,
+        }))?))
+    }
+
+    fn validate_id(&self) -> Result<()> {
+        ensure!(
+            self.intent_id == format!("intent-{}", self.binding_hash()?),
+            "execution intent binding hash mismatch"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChainCheckpoint {
     pub schema_version: u32,
@@ -416,12 +671,18 @@ pub struct ChainCheckpoint {
     pub facts: BTreeSet<String>,
     pub receipts: BTreeMap<String, Receipt>,
     pub operation_receipts: BTreeMap<String, String>,
+    #[serde(default)]
+    pub execution_intents: BTreeMap<String, StepExecutionIntent>,
     pub cleanup_ledger: Vec<RollbackRecord>,
     pub execution_order: Vec<String>,
     #[serde(default)]
     pub traversed_edges: Vec<TraversedEdge>,
     pub steps_used: u64,
     pub state_changes_used: u64,
+    #[serde(default)]
+    pub quarantined: bool,
+    #[serde(default)]
+    pub quarantine_reason: Option<String>,
     pub complete: bool,
     pub updated_ms: u64,
 }
@@ -446,7 +707,17 @@ impl Default for ChainBudgets {
 
 pub trait ChainAdapter: Send + Sync {
     fn name(&self) -> &str;
-    fn execute<'a>(&'a self, actor: &'a str, operation: &'a StepOperation) -> ReceiptFuture<'a>;
+    fn execute<'a>(
+        &'a self,
+        actor: &'a str,
+        operation: &'a StepOperation,
+        binding: &'a AdapterExecutionBinding,
+    ) -> ReceiptFuture<'a>;
+    /// Returns only receipts that the adapter considers durably sealed. The
+    /// engine applies the exact run/actor/action/post-intent filters itself.
+    fn receipt_inventory<'a>(&'a self) -> ReceiptInventoryFuture<'a> {
+        Box::pin(async { Ok(vec![]) })
+    }
 }
 
 #[derive(Clone)]
@@ -462,13 +733,26 @@ impl ChainAdapter for RuntimeAdapter {
     fn name(&self) -> &str {
         "tool-runtime"
     }
-    fn execute<'a>(&'a self, actor: &'a str, operation: &'a StepOperation) -> ReceiptFuture<'a> {
+    fn execute<'a>(
+        &'a self,
+        actor: &'a str,
+        operation: &'a StepOperation,
+        _binding: &'a AdapterExecutionBinding,
+    ) -> ReceiptFuture<'a> {
         Box::pin(async move {
             let StepOperation::Tool { action } = operation else {
-                bail!("tool runtime does not support external operation")
+                return Err(AdapterDispatchError::not_dispatched(
+                    "tool runtime does not support external operation",
+                ));
             };
-            self.runtime.execute(actor, action.clone()).await
+            self.runtime
+                .execute(actor, action.clone())
+                .await
+                .map_err(|error| AdapterDispatchError::outcome_unknown(error.to_string()))
         })
+    }
+    fn receipt_inventory<'a>(&'a self) -> ReceiptInventoryFuture<'a> {
+        Box::pin(async move { self.runtime.evidence.manifest() })
     }
 }
 
@@ -519,8 +803,24 @@ impl ChainEngine {
         template: &ChainTemplate,
         observed: ObservedState,
     ) -> Result<ChainCheckpoint> {
+        // The checkpoint lock covers existence checks, reads, adapter I/O and
+        // every write. A competing engine therefore fails before it can infer
+        // a fresh run or dispatch the same operation.
+        let _checkpoint_lock =
+            storage::RunLock::acquire(&checkpoint_lock_root(&self.checkpoint_path)?)?;
         template.validate()?;
-        let eligibility = template.eligibility(&observed, &self.capabilities, &self.policy);
+        let mut eligibility = template.eligibility(&observed, &self.capabilities, &self.policy);
+        for step in &template.steps {
+            if let Some(cleanup) = &step.cleanup {
+                if let Err(error) = self.adapter_for(&cleanup.operation) {
+                    eligibility.reasons.push(format!(
+                        "step {} cleanup adapter unavailable: {error}",
+                        step.id
+                    ));
+                }
+            }
+        }
+        eligibility.enabled = eligibility.reasons.is_empty();
         ensure!(
             eligibility.enabled,
             "chain disabled: {}",
@@ -531,13 +831,30 @@ impl ChainEngine {
         } else {
             self.initial_checkpoint(run_id, template, observed)?
         };
+        if checkpoint.quarantined || quarantine_status_present(&checkpoint) {
+            checkpoint.quarantined = true;
+            checkpoint
+                .quarantine_reason
+                .get_or_insert_with(|| "chain contains an indeterminate or cancelled step".into());
+            if self.budgets.rollback_on_failure {
+                self.rollback(template, &mut checkpoint).await?;
+            }
+            checkpoint.complete = false;
+            self.persist(&mut checkpoint)?;
+            return Ok(checkpoint);
+        }
         while let Some(step_id) = checkpoint.pending.first().cloned() {
-            checkpoint.pending.remove(0);
             if checkpoint
                 .steps
                 .get(&step_id)
-                .is_some_and(|r| r.status.success())
+                .is_some_and(|r| r.status.terminal())
             {
+                let step = template
+                    .steps
+                    .iter()
+                    .find(|s| s.id == step_id)
+                    .context("scheduled step missing")?;
+                self.finalize_scheduled_step(template, step, &mut checkpoint)?;
                 continue;
             }
             if self.cancelled.load(Ordering::SeqCst) {
@@ -545,8 +862,16 @@ impl ChainEngine {
                     step_id.clone(),
                     record(StepStatus::Cancelled, "chain cancelled"),
                 );
+                checkpoint.quarantined = true;
+                checkpoint.quarantine_reason = Some(format!("step {step_id} was cancelled"));
                 self.persist(&mut checkpoint)?;
-                self.rollback(template, &mut checkpoint).await;
+                let step = template
+                    .steps
+                    .iter()
+                    .find(|s| s.id == step_id)
+                    .context("scheduled step missing")?;
+                self.finalize_scheduled_step(template, step, &mut checkpoint)?;
+                self.rollback(template, &mut checkpoint).await?;
                 self.persist(&mut checkpoint)?;
                 return Ok(checkpoint);
             }
@@ -558,7 +883,7 @@ impl ChainEngine {
                 .iter()
                 .find(|s| s.id == step_id)
                 .context("scheduled step missing")?;
-            let result = self.execute_step(step, &checkpoint).await;
+            let result = self.execute_step(step, &mut checkpoint).await?;
             checkpoint.steps_used += 1;
             let failed = !result.status.success();
             checkpoint.state_changes_used = checkpoint
@@ -579,17 +904,54 @@ impl ChainEngine {
             }
             checkpoint.execution_order.push(step.id.clone());
             checkpoint.steps.insert(step.id.clone(), result.record);
-            self.schedule_edges(template, step, &mut checkpoint);
+            if result.status == StepStatus::Indeterminate {
+                checkpoint.quarantined = true;
+                checkpoint.quarantine_reason = Some(format!(
+                    "step {} has an indeterminate adapter outcome",
+                    step.id
+                ));
+            }
+            // First durably apply the outcome while the step is still on the
+            // schedule. A crash here resumes finalization, never adapter I/O.
             self.persist(&mut checkpoint)?;
-            if failed && self.budgets.rollback_on_failure && !has_failure_edge(template, &step.id) {
-                self.rollback(template, &mut checkpoint).await;
+            self.finalize_scheduled_step(template, step, &mut checkpoint)?;
+            if failed
+                && self.budgets.rollback_on_failure
+                && (result.status == StepStatus::Indeterminate
+                    || !has_failure_edge(template, &step.id))
+            {
+                self.rollback(template, &mut checkpoint).await?;
                 self.persist(&mut checkpoint)?;
                 break;
             }
+            if checkpoint.quarantined {
+                break;
+            }
         }
-        checkpoint.complete = checkpoint.pending.is_empty();
+        if self.budgets.rollback_on_failure && rollback_required(template, &checkpoint) {
+            self.rollback(template, &mut checkpoint).await?;
+        }
+        checkpoint.complete = checkpoint.pending.is_empty() && !checkpoint.quarantined;
         self.persist(&mut checkpoint)?;
         Ok(checkpoint)
+    }
+
+    fn finalize_scheduled_step(
+        &self,
+        template: &ChainTemplate,
+        step: &ChainStep,
+        checkpoint: &mut ChainCheckpoint,
+    ) -> Result<()> {
+        ensure!(
+            checkpoint
+                .steps
+                .get(&step.id)
+                .is_some_and(|record| record.status.terminal()),
+            "cannot finalize a step without a durable terminal outcome"
+        );
+        self.schedule_edges(template, step, checkpoint);
+        checkpoint.pending.retain(|pending| pending != &step.id);
+        self.persist(checkpoint)
     }
 
     fn initial_checkpoint(
@@ -617,11 +979,14 @@ impl ChainEngine {
             facts: observed.facts,
             receipts: observed.receipts,
             operation_receipts: BTreeMap::new(),
+            execution_intents: BTreeMap::new(),
             cleanup_ledger: vec![],
             execution_order: vec![],
             traversed_edges: vec![],
             steps_used: 0,
             state_changes_used: 0,
+            quarantined: false,
+            quarantine_reason: None,
             complete: false,
             updated_ms: now_ms(),
         })
@@ -639,13 +1004,71 @@ impl ChainEngine {
         for receipt in checkpoint.receipts.values() {
             validate_receipt(receipt)?;
         }
+        for (key, intent) in &checkpoint.execution_intents {
+            let step = template
+                .steps
+                .iter()
+                .find(|step| step.id == intent.step_id)
+                .context("execution intent references an unknown step")?;
+            let (actor, operation) = match intent.phase {
+                ExecutionPhase::Primary => ("chain-primary", &step.operation),
+                ExecutionPhase::Replay => (step.replay.independent_actor.as_str(), &step.operation),
+                ExecutionPhase::Cleanup => (
+                    "chain-rollback",
+                    &step
+                        .cleanup
+                        .as_ref()
+                        .context("cleanup intent references a step without cleanup")?
+                        .operation,
+                ),
+            };
+            ensure!(
+                key == &intent_key(&step.id, intent.phase),
+                "execution intent map key mismatch"
+            );
+            let fingerprint = operation.fingerprint()?;
+            validate_intent_binding(
+                intent,
+                &checkpoint,
+                &step.id,
+                intent.phase,
+                actor,
+                &fingerprint,
+            )?;
+            ensure!(
+                intent
+                    .prior_receipt_ids
+                    .windows(2)
+                    .all(|ids| ids[0] < ids[1]),
+                "execution intent prior receipt ids are not canonical"
+            );
+            match (&intent.resolution, &intent.receipt_id) {
+                (
+                    Some(IntentResolution::Executed | IntentResolution::Recovered),
+                    Some(receipt_id),
+                ) => validate_expected_receipt(
+                    checkpoint
+                        .receipts
+                        .get(receipt_id)
+                        .context("resolved intent receipt missing")?,
+                    intent,
+                    operation,
+                )?,
+                (Some(_), None) | (None, None) => {}
+                _ => bail!("execution intent resolution/receipt mismatch"),
+            }
+        }
         Ok(checkpoint)
     }
     fn persist(&self, checkpoint: &mut ChainCheckpoint) -> Result<()> {
         checkpoint.updated_ms = now_ms();
         storage::write_json(&self.checkpoint_path, checkpoint)
     }
-    async fn execute_step(&self, step: &ChainStep, checkpoint: &ChainCheckpoint) -> StepExecution {
+    async fn execute_step(
+        &self,
+        step: &ChainStep,
+        checkpoint: &mut ChainCheckpoint,
+    ) -> Result<StepExecution> {
         let started = now_ms();
         let finish =
             |status, message: String, receipts: Vec<Receipt>, dedup_entry, deduplicated_from| {
@@ -655,7 +1078,7 @@ impl ChainEngine {
                     } else {
                         0
                     };
-                StepExecution {
+                Ok(StepExecution {
                     record: StepRecord {
                         status,
                         receipt_ids: receipts.iter().map(|r| r.id.clone()).collect(),
@@ -668,7 +1091,7 @@ impl ChainEngine {
                     dedup_entry,
                     status,
                     state_changes_consumed,
-                }
+                })
             };
         let observed = ObservedState {
             facts: checkpoint.facts.clone(),
@@ -707,9 +1130,9 @@ impl ChainEngine {
             );
         }
         let planned_state_changes = if step.requirements.state_change {
-            1 + u64::from(step.replay.required)
+            1 + u64::from(step.replay.required) + u64::from(step.cleanup.is_some())
         } else {
-            0
+            u64::from(step.cleanup.is_some())
         };
         if checkpoint
             .state_changes_used
@@ -732,6 +1155,35 @@ impl ChainEngine {
                 None,
                 None,
             );
+        }
+        if step.requirements.state_change && step.cleanup.is_none() {
+            return finish(
+                StepStatus::FailedPolicy,
+                "state-changing step requires authored idempotent cleanup".into(),
+                vec![],
+                None,
+                None,
+            );
+        }
+        if let Some(cleanup) = &step.cleanup {
+            if let Err(error) = self.policy.check_action(cleanup.operation.receipt_action()) {
+                return finish(
+                    StepStatus::FailedPolicy,
+                    format!("cleanup denied before primary dispatch: {error}"),
+                    vec![],
+                    None,
+                    None,
+                );
+            }
+            if let Err(error) = self.adapter_for(&cleanup.operation) {
+                return finish(
+                    StepStatus::Unsupported,
+                    format!("cleanup adapter unavailable before primary dispatch: {error}"),
+                    vec![],
+                    None,
+                    None,
+                );
+            }
         }
         for dependency in &step.receipt_dependencies {
             let Some(record) = checkpoint.steps.get(dependency) else {
@@ -808,36 +1260,34 @@ impl ChainEngine {
                 )
             }
         };
-        let primary = match adapter.execute("chain-primary", &step.operation).await {
-            Ok(receipt) => receipt,
-            Err(error) => {
-                return finish(
-                    StepStatus::FailedExecution,
-                    error.to_string(),
-                    vec![],
-                    None,
-                    None,
-                )
+        let dependency_receipts = dependency_receipt_ids(step, checkpoint);
+        let primary = match self
+            .execute_phase(
+                checkpoint,
+                step,
+                ExecutionPhase::Primary,
+                "chain-primary",
+                &step.operation,
+                dependency_receipts.clone(),
+                adapter.clone(),
+            )
+            .await?
+        {
+            PhaseExecution::Receipt(receipt) => *receipt,
+            PhaseExecution::Indeterminate(message) => {
+                let mut result = finish(StepStatus::Indeterminate, message, vec![], None, None)?;
+                result.state_changes_consumed = conservative_step_state_changes(step, checkpoint);
+                return Ok(result);
+            }
+            PhaseExecution::Failed { message, attempted } => {
+                let mut result = finish(StepStatus::FailedExecution, message, vec![], None, None)?;
+                if attempted {
+                    result.state_changes_consumed =
+                        conservative_step_state_changes(step, checkpoint);
+                }
+                return Ok(result);
             }
         };
-        if let Err(error) = validate_receipt(&primary) {
-            return finish(
-                StepStatus::FailedExecution,
-                error.to_string(),
-                vec![],
-                None,
-                None,
-            );
-        }
-        if primary.output.action != *step.operation.receipt_action() {
-            return finish(
-                StepStatus::FailedExecution,
-                "receipt action does not match declared step".into(),
-                vec![],
-                None,
-                None,
-            );
-        }
         if !primary.output.successful {
             return finish(
                 StepStatus::FailedExecution,
@@ -849,53 +1299,63 @@ impl ChainEngine {
         }
         let mut receipts = vec![primary];
         if step.replay.required {
-            let replay = match adapter
-                .execute(&step.replay.independent_actor, &step.operation)
-                .await
+            if !step.replay.predicate.matches(&receipts[0]) {
+                return finish(
+                    StepStatus::FailedReplay,
+                    "primary receipt does not satisfy the typed replay predicate".into(),
+                    receipts,
+                    None,
+                    None,
+                );
+            }
+            let replay_prior = dependency_receipts
+                .into_iter()
+                .chain(std::iter::once(receipts[0].id.clone()))
+                .collect();
+            let replay = match self
+                .execute_phase(
+                    checkpoint,
+                    step,
+                    ExecutionPhase::Replay,
+                    &step.replay.independent_actor,
+                    &step.operation,
+                    replay_prior,
+                    adapter,
+                )
+                .await?
             {
-                Ok(receipt) => receipt,
-                Err(error) => {
-                    return finish(
-                        StepStatus::FailedReplay,
-                        error.to_string(),
-                        receipts,
-                        None,
-                        None,
-                    )
+                PhaseExecution::Receipt(receipt) => *receipt,
+                PhaseExecution::Indeterminate(message) => {
+                    let mut result =
+                        finish(StepStatus::Indeterminate, message, receipts, None, None)?;
+                    result.state_changes_consumed =
+                        conservative_step_state_changes(step, checkpoint);
+                    return Ok(result);
+                }
+                PhaseExecution::Failed { message, attempted } => {
+                    let mut result =
+                        finish(StepStatus::FailedReplay, message, receipts, None, None)?;
+                    if attempted {
+                        result.state_changes_consumed =
+                            conservative_step_state_changes(step, checkpoint);
+                    }
+                    return Ok(result);
                 }
             };
-            if let Err(error) = validate_receipt(&replay) {
-                return finish(
-                    StepStatus::FailedReplay,
-                    error.to_string(),
-                    receipts,
-                    None,
-                    None,
-                );
-            }
-            if replay.output.action != *step.operation.receipt_action() {
-                return finish(
-                    StepStatus::FailedReplay,
-                    "replay receipt action does not match declared step".into(),
-                    receipts,
-                    None,
-                    None,
-                );
-            }
-            if !replay.output.successful {
-                receipts.push(replay);
-                return finish(
-                    StepStatus::FailedReplay,
-                    "replay receipt reports failure".into(),
-                    receipts,
-                    None,
-                    None,
-                );
-            }
             if replay.actor == receipts[0].actor || replay.id == receipts[0].id {
                 return finish(
                     StepStatus::FailedReplay,
                     "replay was not independently executed".into(),
+                    receipts,
+                    None,
+                    None,
+                );
+            }
+            if !step.replay.predicate.matches(&replay) {
+                receipts.push(replay);
+                return finish(
+                    StepStatus::FailedReplay,
+                    "replay receipt does not satisfy the typed replay predicate".into(),
                     receipts,
                     None,
                     None,
@@ -946,6 +1406,227 @@ impl ChainEngine {
             None,
         )
     }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn execute_phase(
+        &self,
+        checkpoint: &mut ChainCheckpoint,
+        step: &ChainStep,
+        phase: ExecutionPhase,
+        actor: &str,
+        operation: &StepOperation,
+        mut prior_receipt_ids: Vec<String>,
+        adapter: Arc<dyn ChainAdapter>,
+    ) -> Result<PhaseExecution> {
+        let key = intent_key(&step.id, phase);
+        let fingerprint = operation.fingerprint()?;
+        prior_receipt_ids.sort();
+        prior_receipt_ids.dedup();
+        let required_prior_receipt_ids = prior_receipt_ids.clone();
+        let existing = checkpoint.execution_intents.contains_key(&key);
+        if !existing {
+            // Snapshot the sealed inventory before publishing the intent. This
+            // makes the prior receipt set exact even when receipts exist
+            // outside the chain checkpoint.
+            let baseline = adapter.receipt_inventory().await?;
+            prior_receipt_ids.extend(baseline.into_iter().filter_map(|receipt| {
+                (validate_receipt(&receipt).is_ok()
+                    && receipt.run_id == checkpoint.run_id
+                    && receipt.actor == actor
+                    && receipt.output.action == *operation.receipt_action())
+                .then_some(receipt.id)
+            }));
+            let intent = StepExecutionIntent::new(
+                &checkpoint.run_id,
+                &checkpoint.template_hash,
+                &step.id,
+                phase,
+                actor,
+                fingerprint.clone(),
+                prior_receipt_ids,
+            )?;
+            checkpoint.execution_intents.insert(key.clone(), intent);
+            // This write is the safety boundary: no adapter execution happens
+            // unless the exact intent is durable first.
+            self.persist(checkpoint)?;
+        }
+
+        {
+            let intent = checkpoint
+                .execution_intents
+                .get(&key)
+                .context("phase intent disappeared")?;
+            validate_intent_binding(intent, checkpoint, &step.id, phase, actor, &fingerprint)?;
+            ensure!(
+                required_prior_receipt_ids
+                    .iter()
+                    .all(|receipt_id| intent.prior_receipt_ids.contains(receipt_id)),
+                "execution intent does not bind all required prior receipts"
+            );
+            if let Some(resolution) = intent.resolution {
+                return match resolution {
+                    IntentResolution::Executed | IntentResolution::Recovered => {
+                        let receipt_id = intent
+                            .receipt_id
+                            .as_deref()
+                            .context("resolved intent missing receipt id")?;
+                        let receipt = checkpoint
+                            .receipts
+                            .get(receipt_id)
+                            .context("resolved intent receipt missing from checkpoint")?;
+                        validate_expected_receipt(receipt, intent, operation)?;
+                        Ok(PhaseExecution::Receipt(Box::new(receipt.clone())))
+                    }
+                    IntentResolution::Indeterminate => Ok(PhaseExecution::Indeterminate(format!(
+                        "{} phase outcome is indeterminate",
+                        phase.as_str()
+                    ))),
+                    IntentResolution::Ambiguous => Ok(PhaseExecution::Failed {
+                        message: format!(
+                            "{} phase has multiple matching sealed receipts",
+                            phase.as_str()
+                        ),
+                        attempted: true,
+                    }),
+                    IntentResolution::Rejected => Ok(PhaseExecution::Failed {
+                        message: format!(
+                            "{} phase receipt failed exact provenance validation",
+                            phase.as_str()
+                        ),
+                        attempted: true,
+                    }),
+                    IntentResolution::NotDispatched => Ok(PhaseExecution::Failed {
+                        message: format!("{} phase was not dispatched", phase.as_str()),
+                        attempted: false,
+                    }),
+                };
+            }
+        }
+
+        if existing {
+            let inventory = match adapter.receipt_inventory().await {
+                Ok(receipts) => receipts,
+                Err(error) => {
+                    resolve_intent(checkpoint, &key, IntentResolution::Indeterminate, None)?;
+                    self.persist(checkpoint)?;
+                    return Ok(PhaseExecution::Indeterminate(format!(
+                        "{} phase receipt inventory failed: {error}",
+                        phase.as_str()
+                    )));
+                }
+            };
+            let intent = checkpoint
+                .execution_intents
+                .get(&key)
+                .context("phase intent disappeared")?
+                .clone();
+            let mut matches = inventory
+                .into_iter()
+                .filter(|receipt| {
+                    !intent.prior_receipt_ids.contains(&receipt.id)
+                        && validate_expected_receipt(receipt, &intent, operation).is_ok()
+                })
+                .collect::<Vec<_>>();
+            return match matches.len() {
+                0 => {
+                    // This terminal resolution deliberately requires operator
+                    // reconciliation in a future version; an automatic retry
+                    // here could duplicate a state-changing operation.
+                    resolve_intent(checkpoint, &key, IntentResolution::Indeterminate, None)?;
+                    self.persist(checkpoint)?;
+                    Ok(PhaseExecution::Indeterminate(format!(
+                        "{} phase has no exact post-intent sealed receipt; operation will not be repeated",
+                        phase.as_str()
+                    )))
+                }
+                1 => {
+                    let receipt = matches.pop().context("one receipt expected")?;
+                    let receipt_id = receipt.id.clone();
+                    checkpoint
+                        .receipts
+                        .insert(receipt_id.clone(), receipt.clone());
+                    resolve_intent(
+                        checkpoint,
+                        &key,
+                        IntentResolution::Recovered,
+                        Some(receipt_id),
+                    )?;
+                    self.persist(checkpoint)?;
+                    Ok(PhaseExecution::Receipt(Box::new(receipt)))
+                }
+                _ => {
+                    resolve_intent(checkpoint, &key, IntentResolution::Ambiguous, None)?;
+                    self.persist(checkpoint)?;
+                    Ok(PhaseExecution::Failed {
+                        message: format!(
+                            "{} phase has multiple exact post-intent sealed receipts; refusing to choose",
+                            phase.as_str()
+                        ),
+                        attempted: true,
+                    })
+                }
+            };
+        }
+
+        let intent = checkpoint
+            .execution_intents
+            .get(&key)
+            .context("phase intent disappeared")?
+            .clone();
+        let binding = AdapterExecutionBinding {
+            intent_id: intent.intent_id.clone(),
+            operation_fingerprint: intent.operation_fingerprint.clone(),
+        };
+        let receipt = match adapter.execute(actor, operation, &binding).await {
+            Ok(receipt) => receipt,
+            Err(error) => {
+                return match error.classification {
+                    DispatchClassification::NotDispatched => {
+                        resolve_intent(checkpoint, &key, IntentResolution::NotDispatched, None)?;
+                        self.persist(checkpoint)?;
+                        Ok(PhaseExecution::Failed {
+                            message: format!(
+                                "{} phase was not dispatched: {error}",
+                                phase.as_str()
+                            ),
+                            attempted: false,
+                        })
+                    }
+                    DispatchClassification::OutcomeUnknown => {
+                        resolve_intent(checkpoint, &key, IntentResolution::Indeterminate, None)?;
+                        self.persist(checkpoint)?;
+                        Ok(PhaseExecution::Indeterminate(format!(
+                            "{} phase dispatch outcome is unknown: {error}",
+                            phase.as_str()
+                        )))
+                    }
+                };
+            }
+        };
+        if let Err(error) = validate_expected_receipt(&receipt, &intent, operation) {
+            resolve_intent(checkpoint, &key, IntentResolution::Rejected, None)?;
+            self.persist(checkpoint)?;
+            return Ok(PhaseExecution::Failed {
+                message: error.to_string(),
+                attempted: true,
+            });
+        }
+        let receipt_id = receipt.id.clone();
+        checkpoint
+            .receipts
+            .insert(receipt_id.clone(), receipt.clone());
+        resolve_intent(
+            checkpoint,
+            &key,
+            IntentResolution::Executed,
+            Some(receipt_id),
+        )?;
+        // Persist each phase result independently. In particular, the primary
+        // receipt is durable before a replay intent can be created.
+        self.persist(checkpoint)?;
+        Ok(PhaseExecution::Receipt(Box::new(receipt)))
+    }
+
     fn adapter_for(&self, operation: &StepOperation) -> Result<Arc<dyn ChainAdapter>> {
         match operation {
             StepOperation::Tool { .. } => Ok(self.tool_adapter.clone()),
@@ -967,6 +1648,9 @@ impl ChainEngine {
             .get(&step.id)
             .map(|r| r.status)
             .unwrap_or(StepStatus::FailedExecution);
+        if matches!(status, StepStatus::Indeterminate | StepStatus::Cancelled) {
+            return;
+        }
         let mut outgoing: Vec<_> = template
             .edges
             .iter()
@@ -1008,7 +1692,11 @@ impl ChainEngine {
             }
         }
     }
-    async fn rollback(&self, template: &ChainTemplate, checkpoint: &mut ChainCheckpoint) {
+    async fn rollback(
+        &self,
+        template: &ChainTemplate,
+        checkpoint: &mut ChainCheckpoint,
+    ) -> Result<()> {
         for step_id in checkpoint.execution_order.clone().into_iter().rev() {
             let Some(step) = template.steps.iter().find(|s| s.id == step_id) else {
                 continue;
@@ -1024,29 +1712,85 @@ impl ChainEngine {
                 continue;
             }
             let attempted_ms = now_ms();
-            let result = match self.adapter_for(&cleanup.operation) {
-                Ok(adapter) => adapter.execute("chain-rollback", &cleanup.operation).await,
-                Err(error) => Err(error),
+            if !step_execution_attempted(&step_id, checkpoint) {
+                // Preflight failures (prerequisite, policy, unsupported adapter
+                // or typed NotDispatched) never justify compensating I/O.
+                continue;
+            }
+            let cleanup_denial = if !step.requirements.capabilities.is_subset(&self.capabilities) {
+                Some("cleanup capability unavailable".to_owned())
+            } else if step.requirements.risk > self.budgets.max_risk {
+                Some("cleanup risk exceeds global chain budget".to_owned())
+            } else if checkpoint.state_changes_used.saturating_add(1)
+                > self.budgets.max_state_changes
+            {
+                Some("cleanup state-change budget exhausted".to_owned())
+            } else {
+                self.policy
+                    .check_action(cleanup.operation.receipt_action())
+                    .err()
+                    .map(|error| format!("cleanup denied by policy: {error}"))
             };
-            let (succeeded, receipt_id, message) = match result {
-                Ok(receipt) => {
-                    let valid = validate_receipt(&receipt).is_ok()
-                        && receipt.output.successful
-                        && receipt.output.action == *cleanup.operation.receipt_action();
-                    let id = receipt.id.clone();
-                    checkpoint.receipts.insert(id.clone(), receipt);
-                    (
-                        valid,
-                        Some(id),
-                        if valid {
-                            "cleanup completed".into()
-                        } else {
-                            "cleanup receipt invalid or unsuccessful".into()
-                        },
-                    )
+            if let Some(message) = cleanup_denial {
+                checkpoint.cleanup_ledger.push(RollbackRecord {
+                    step_id,
+                    cleanup: cleanup.clone(),
+                    attempted_ms,
+                    succeeded: false,
+                    receipt_id: None,
+                    message,
+                });
+                self.persist(checkpoint)?;
+                continue;
+            }
+            let adapter = match self.adapter_for(&cleanup.operation) {
+                Ok(adapter) => adapter,
+                Err(error) => {
+                    checkpoint.cleanup_ledger.push(RollbackRecord {
+                        step_id,
+                        cleanup: cleanup.clone(),
+                        attempted_ms,
+                        succeeded: false,
+                        receipt_id: None,
+                        message: error.to_string(),
+                    });
+                    self.persist(checkpoint)?;
+                    continue;
                 }
-                Err(error) => (false, None, error.to_string()),
             };
+            let prior_receipt_ids = checkpoint
+                .steps
+                .get(&step_id)
+                .map(|record| record.receipt_ids.clone())
+                .unwrap_or_default();
+            let result = self
+                .execute_phase(
+                    checkpoint,
+                    step,
+                    ExecutionPhase::Cleanup,
+                    "chain-rollback",
+                    &cleanup.operation,
+                    prior_receipt_ids,
+                    adapter,
+                )
+                .await?;
+            let (succeeded, receipt_id, message, dispatched) = match result {
+                PhaseExecution::Receipt(receipt) => (
+                    receipt.output.successful,
+                    Some(receipt.id),
+                    if receipt.output.successful {
+                        "cleanup completed".into()
+                    } else {
+                        "cleanup receipt reports failure".into()
+                    },
+                    true,
+                ),
+                PhaseExecution::Indeterminate(message) => (false, None, message, true),
+                PhaseExecution::Failed { message, attempted } => (false, None, message, attempted),
+            };
+            if dispatched {
+                checkpoint.state_changes_used = checkpoint.state_changes_used.saturating_add(1);
+            }
             checkpoint.cleanup_ledger.push(RollbackRecord {
                 step_id,
                 cleanup: cleanup.clone(),
@@ -1055,8 +1799,16 @@ impl ChainEngine {
                 receipt_id,
                 message,
             });
+            self.persist(checkpoint)?;
         }
+        Ok(())
     }
+}
+
+enum PhaseExecution {
+    Receipt(Box<Receipt>),
+    Indeterminate(String),
+    Failed { message: String, attempted: bool },
 }
 
 struct StepExecution {
@@ -1065,6 +1817,151 @@ struct StepExecution {
     dedup_entry: Option<(String, String)>,
     status: StepStatus,
     state_changes_consumed: u64,
+}
+fn intent_key(step_id: &str, phase: ExecutionPhase) -> String {
+    format!("{step_id}::{}", phase.as_str())
+}
+fn checkpoint_lock_root(checkpoint_path: &Path) -> Result<PathBuf> {
+    let parent = checkpoint_path
+        .parent()
+        .context("checkpoint requires a parent directory")?;
+    let file_name = checkpoint_path
+        .file_name()
+        .context("checkpoint requires a file name")?
+        .to_string_lossy();
+    Ok(parent.join(format!(".checkpoint-lock-{}", hash(file_name.as_bytes()))))
+}
+fn dependency_receipt_ids(step: &ChainStep, checkpoint: &ChainCheckpoint) -> Vec<String> {
+    let mut ids = step
+        .receipt_dependencies
+        .iter()
+        .filter_map(|dependency| checkpoint.steps.get(dependency))
+        .flat_map(|record| record.receipt_ids.iter().cloned())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+fn conservative_step_state_changes(step: &ChainStep, checkpoint: &ChainCheckpoint) -> u64 {
+    if !step.requirements.state_change {
+        return 0;
+    }
+    checkpoint
+        .execution_intents
+        .values()
+        .filter(|intent| {
+            intent.step_id == step.id
+                && matches!(
+                    intent.phase,
+                    ExecutionPhase::Primary | ExecutionPhase::Replay
+                )
+                && intent
+                    .resolution
+                    .is_some_and(|resolution| resolution != IntentResolution::NotDispatched)
+        })
+        .count() as u64
+}
+fn step_execution_attempted(step_id: &str, checkpoint: &ChainCheckpoint) -> bool {
+    checkpoint.execution_intents.values().any(|intent| {
+        intent.step_id == step_id
+            && matches!(
+                intent.phase,
+                ExecutionPhase::Primary | ExecutionPhase::Replay
+            )
+            && intent
+                .resolution
+                .is_some_and(|resolution| resolution != IntentResolution::NotDispatched)
+    })
+}
+fn resolve_intent(
+    checkpoint: &mut ChainCheckpoint,
+    key: &str,
+    resolution: IntentResolution,
+    receipt_id: Option<String>,
+) -> Result<()> {
+    ensure!(
+        matches!(
+            (resolution, receipt_id.is_some()),
+            (
+                IntentResolution::Executed | IntentResolution::Recovered,
+                true
+            ) | (
+                IntentResolution::Indeterminate
+                    | IntentResolution::Ambiguous
+                    | IntentResolution::Rejected
+                    | IntentResolution::NotDispatched,
+                false
+            )
+        ),
+        "intent resolution/receipt mismatch"
+    );
+    let intent = checkpoint
+        .execution_intents
+        .get_mut(key)
+        .context("phase intent missing")?;
+    ensure!(intent.resolution.is_none(), "phase intent already resolved");
+    intent.resolution = Some(resolution);
+    intent.receipt_id = receipt_id;
+    intent.resolved_ms = Some(now_ms());
+    Ok(())
+}
+fn validate_intent_binding(
+    intent: &StepExecutionIntent,
+    checkpoint: &ChainCheckpoint,
+    step_id: &str,
+    phase: ExecutionPhase,
+    actor: &str,
+    operation_fingerprint: &str,
+) -> Result<()> {
+    intent.validate_id()?;
+    ensure!(
+        intent.run_id == checkpoint.run_id
+            && intent.template_hash == checkpoint.template_hash
+            && intent.step_id == step_id
+            && intent.phase == phase
+            && intent.actor == actor
+            && intent.operation_fingerprint == operation_fingerprint,
+        "execution intent provenance mismatch"
+    );
+    ensure!(
+        intent.resolution.is_some() == intent.resolved_ms.is_some(),
+        "execution intent resolution timestamp mismatch"
+    );
+    Ok(())
+}
+fn validate_expected_receipt(
+    receipt: &Receipt,
+    intent: &StepExecutionIntent,
+    operation: &StepOperation,
+) -> Result<()> {
+    validate_receipt(receipt)?;
+    ensure!(
+        receipt.run_id == intent.run_id,
+        "receipt run id does not match execution intent"
+    );
+    ensure!(
+        receipt.actor == intent.actor,
+        "receipt actor does not match execution intent"
+    );
+    ensure!(
+        receipt.output.action == *operation.receipt_action(),
+        "receipt action does not match execution intent"
+    );
+    if matches!(operation, StepOperation::External { .. }) {
+        let expected = serde_json::to_value(AdapterExecutionBinding {
+            intent_id: intent.intent_id.clone(),
+            operation_fingerprint: intent.operation_fingerprint.clone(),
+        })?;
+        ensure!(
+            receipt.output.data.get("metisblack_execution_binding") == Some(&expected),
+            "external receipt execution binding mismatch"
+        );
+    }
+    ensure!(
+        receipt.captured_ms >= intent.created_ms,
+        "receipt predates execution intent"
+    );
+    Ok(())
 }
 fn record(status: StepStatus, message: &str) -> StepRecord {
     StepRecord {
@@ -1081,6 +1978,29 @@ fn has_failure_edge(template: &ChainTemplate, step: &str) -> bool {
         .edges
         .iter()
         .any(|e| e.from == step && e.condition == EdgeCondition::OnFailure)
+}
+fn rollback_required(template: &ChainTemplate, checkpoint: &ChainCheckpoint) -> bool {
+    checkpoint.execution_intents.values().any(|intent| {
+        intent.phase == ExecutionPhase::Cleanup
+            && !checkpoint
+                .cleanup_ledger
+                .iter()
+                .any(|record| record.step_id == intent.step_id)
+    }) || checkpoint.execution_order.iter().any(|step_id| {
+        checkpoint
+            .steps
+            .get(step_id)
+            .is_some_and(|record| !record.status.success())
+            && !has_failure_edge(template, step_id)
+    })
+}
+fn quarantine_status_present(checkpoint: &ChainCheckpoint) -> bool {
+    checkpoint.steps.values().any(|record| {
+        matches!(
+            record.status,
+            StepStatus::Indeterminate | StepStatus::Cancelled
+        )
+    })
 }
 fn condition_holds(
     condition: &Condition,
@@ -1484,16 +2404,94 @@ fn two_step_chain(
 mod tests {
     use super::*;
     use domain::{NetworkRule, Scope, ToolOutput};
-    use std::sync::Mutex;
+    use std::sync::{atomic::AtomicUsize, Mutex};
 
+    enum MockDispatch {
+        Receipt(bool),
+        NotDispatched(String),
+        OutcomeUnknown(String),
+    }
     struct MockAdapter {
-        outcomes: Mutex<VecDeque<Result<bool, String>>>,
+        outcomes: Mutex<VecDeque<MockDispatch>>,
+        data: Mutex<VecDeque<Value>>,
+        inventory: Mutex<Vec<Receipt>>,
+        calls: AtomicUsize,
+    }
+    struct BlockingAdapter {
+        started: tokio::sync::Semaphore,
+        release: tokio::sync::Semaphore,
+        calls: AtomicUsize,
+    }
+    impl BlockingAdapter {
+        fn new() -> Self {
+            Self {
+                started: tokio::sync::Semaphore::new(0),
+                release: tokio::sync::Semaphore::new(0),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+    impl ChainAdapter for BlockingAdapter {
+        fn name(&self) -> &str {
+            "blocking"
+        }
+        fn execute<'a>(
+            &'a self,
+            actor: &'a str,
+            operation: &'a StepOperation,
+            _binding: &'a AdapterExecutionBinding,
+        ) -> ReceiptFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async move {
+                self.started.add_permits(1);
+                let permit = self.release.acquire().await.map_err(|error| {
+                    AdapterDispatchError::not_dispatched(format!(
+                        "test release semaphore closed: {error}"
+                    ))
+                })?;
+                permit.forget();
+                make_receipt(actor, operation.receipt_action().clone(), true)
+                    .map_err(|error| AdapterDispatchError::outcome_unknown(error.to_string()))
+            })
+        }
     }
     impl MockAdapter {
         fn new(values: Vec<Result<bool, String>>) -> Self {
             Self {
-                outcomes: Mutex::new(values.into()),
+                outcomes: Mutex::new(
+                    values
+                        .into_iter()
+                        .map(|value| match value {
+                            Ok(successful) => MockDispatch::Receipt(successful),
+                            Err(error) => MockDispatch::NotDispatched(error),
+                        })
+                        .collect(),
+                ),
+                data: Mutex::new(VecDeque::new()),
+                inventory: Mutex::new(vec![]),
+                calls: AtomicUsize::new(0),
             }
+        }
+        fn with_dispatch(values: Vec<MockDispatch>) -> Self {
+            Self {
+                outcomes: Mutex::new(values.into()),
+                data: Mutex::new(VecDeque::new()),
+                inventory: Mutex::new(vec![]),
+                calls: AtomicUsize::new(0),
+            }
+        }
+        fn with_data(self, data: Vec<Value>) -> Self {
+            *self.data.lock().expect("mock data lock") = data.into();
+            self
+        }
+        fn add_inventory(&self, receipt: Receipt) {
+            self.inventory
+                .lock()
+                .expect("mock inventory lock")
+                .push(receipt);
+        }
+        fn calls(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
         }
     }
     impl ChainAdapter for MockAdapter {
@@ -1504,34 +2502,77 @@ mod tests {
             &'a self,
             actor: &'a str,
             operation: &'a StepOperation,
+            _binding: &'a AdapterExecutionBinding,
         ) -> ReceiptFuture<'a> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
             let outcome = self
                 .outcomes
                 .lock()
                 .expect("mock lock")
                 .pop_front()
-                .unwrap_or(Ok(true));
-            Box::pin(async move {
-                match outcome {
-                    Ok(successful) => {
-                        make_receipt(actor, operation.receipt_action().clone(), successful)
-                    }
-                    Err(error) => bail!(error),
+                .unwrap_or(MockDispatch::Receipt(true));
+            let observed = matches!(&outcome, MockDispatch::Receipt(true));
+            let data = self
+                .data
+                .lock()
+                .expect("mock data lock")
+                .pop_front()
+                .unwrap_or_else(|| json!({"observed": observed}));
+            let result = match outcome {
+                MockDispatch::Receipt(successful) => make_receipt_with_data(
+                    "run",
+                    actor,
+                    operation.receipt_action().clone(),
+                    successful,
+                    data,
+                )
+                .map_err(|error| AdapterDispatchError::outcome_unknown(error.to_string())),
+                MockDispatch::NotDispatched(error) => {
+                    Err(AdapterDispatchError::not_dispatched(error))
                 }
-            })
+                MockDispatch::OutcomeUnknown(error) => {
+                    Err(AdapterDispatchError::outcome_unknown(error))
+                }
+            };
+            if let Ok(receipt) = &result {
+                self.inventory
+                    .lock()
+                    .expect("mock inventory lock")
+                    .push(receipt.clone());
+            }
+            Box::pin(async move { result })
+        }
+        fn receipt_inventory<'a>(&'a self) -> ReceiptInventoryFuture<'a> {
+            let receipts = self.inventory.lock().expect("mock inventory lock").clone();
+            Box::pin(async move { Ok(receipts) })
         }
     }
     fn make_receipt(actor: &str, action: ToolAction, successful: bool) -> Result<Receipt> {
+        make_receipt_with_data(
+            "run",
+            actor,
+            action,
+            successful,
+            json!({"observed":successful}),
+        )
+    }
+    fn make_receipt_with_data(
+        run_id: &str,
+        actor: &str,
+        action: ToolAction,
+        successful: bool,
+        data: Value,
+    ) -> Result<Receipt> {
         let output = ToolOutput {
             action,
             successful,
-            data: json!({"observed":successful}),
+            data,
             truncated: false,
         };
         let mut receipt = Receipt {
             schema_version: SCHEMA_VERSION,
             id: String::new(),
-            run_id: "run".into(),
+            run_id: run_id.into(),
             actor: actor.into(),
             captured_ms: now_ms(),
             content_hash: hash(&serde_json::to_vec(&output)?),
@@ -1610,6 +2651,29 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         ))
     }
+    fn seed_pending_primary_intent(
+        engine: &ChainEngine,
+        template: &ChainTemplate,
+    ) -> Result<StepExecutionIntent> {
+        let mut checkpoint =
+            engine.initial_checkpoint("run", template, ObservedState::default())?;
+        let step = template.steps.first().context("test step missing")?;
+        let intent = StepExecutionIntent::new(
+            &checkpoint.run_id,
+            &checkpoint.template_hash,
+            &step.id,
+            ExecutionPhase::Primary,
+            "chain-primary",
+            step.operation.fingerprint()?,
+            vec![],
+        )?;
+        checkpoint.execution_intents.insert(
+            intent_key(&step.id, ExecutionPhase::Primary),
+            intent.clone(),
+        );
+        engine.persist(&mut checkpoint)?;
+        Ok(intent)
+    }
 
     #[tokio::test]
     async fn success_and_receipt_dependency() -> Result<()> {
@@ -1622,6 +2686,36 @@ mod tests {
         .await?;
         assert!(result.complete);
         assert_eq!(result.steps["second"].status, StepStatus::Succeeded);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn checkpoint_lock_rejects_concurrent_writer_before_adapter_io() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let adapter = Arc::new(BlockingAdapter::new());
+        let first_engine = engine(dir.path(), adapter.clone())?;
+        let second_engine = engine(dir.path(), adapter.clone())?;
+        let t = template();
+        let first_template = t.clone();
+        let first = tokio::spawn(async move {
+            first_engine
+                .execute("run", &first_template, ObservedState::default())
+                .await
+        });
+        let started = adapter.started.acquire().await?;
+        started.forget();
+
+        let competing = second_engine
+            .execute("run", &t, ObservedState::default())
+            .await;
+
+        assert!(competing
+            .expect_err("concurrent writer must be rejected")
+            .to_string()
+            .contains("run is locked"));
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 1);
+        adapter.release.add_permits(2);
+        first.await??;
+        assert_eq!(adapter.calls.load(Ordering::SeqCst), 2);
         Ok(())
     }
     #[tokio::test]
@@ -1660,6 +2754,7 @@ mod tests {
         t.steps[0].cleanup = Some(CleanupSpec {
             operation: t.steps[0].operation.clone(),
             description: "restore".into(),
+            idempotent: true,
         });
         let result = engine(
             dir.path(),
@@ -1776,18 +2871,408 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
+    async fn outcome_unknown_quarantines_suppresses_fallback_and_runs_cleanup() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut primary = step("primary", "same");
+        primary.requirements.state_change = true;
+        primary.cleanup = Some(CleanupSpec {
+            operation: primary.operation.clone(),
+            description: "idempotently restore the attempted change".into(),
+            idempotent: true,
+        });
+        let fallback = step("fallback", "same");
+        let t = ChainTemplate {
+            id: "unknown-dispatch".into(),
+            version: 1,
+            title: "unknown dispatch".into(),
+            category: "test".into(),
+            description: "unknown dispatch".into(),
+            observed_prerequisites: vec![],
+            required_capabilities: BTreeSet::new(),
+            steps: vec![primary, fallback],
+            edges: vec![CausalEdge {
+                from: "primary".into(),
+                to: "fallback".into(),
+                condition: EdgeCondition::OnFailure,
+                priority: 0,
+                exclusive: true,
+                rationale: "ordinary failure fallback".into(),
+            }],
+        };
+        let adapter = Arc::new(MockAdapter::with_dispatch(vec![
+            MockDispatch::OutcomeUnknown("transport disconnected".into()),
+            MockDispatch::Receipt(true),
+        ]));
+
+        let e = engine(dir.path(), adapter.clone())?;
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["primary"].status, StepStatus::Indeterminate);
+        assert!(!result.steps.contains_key("fallback"));
+        assert!(result.traversed_edges.is_empty());
+        assert!(result.quarantined);
+        assert!(!result.complete);
+        assert_eq!(result.cleanup_ledger.len(), 1);
+        assert!(result.cleanup_ledger[0].succeeded);
+        assert_eq!(result.state_changes_used, 2);
+        assert_eq!(adapter.calls(), 2, "one primary attempt and one cleanup");
+        let resumed = e.execute("run", &t, ObservedState::default()).await?;
+        assert!(resumed.quarantined);
+        assert_eq!(resumed.cleanup_ledger.len(), 1);
+        assert_eq!(adapter.calls(), 2, "restart must not repeat I/O");
+        Ok(())
+    }
+    #[tokio::test]
+    async fn not_dispatched_is_failed_execution_and_never_runs_cleanup() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        t.steps[0].requirements.state_change = true;
+        t.steps[0].cleanup = Some(CleanupSpec {
+            operation: t.steps[0].operation.clone(),
+            description: "cleanup should remain unused".into(),
+            idempotent: true,
+        });
+        let adapter = Arc::new(MockAdapter::with_dispatch(vec![
+            MockDispatch::NotDispatched("queue rejected".into()),
+            MockDispatch::Receipt(true),
+        ]));
+
+        let result = engine(dir.path(), adapter.clone())?
+            .execute("run", &t, ObservedState::default())
+            .await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::FailedExecution);
+        assert!(result.cleanup_ledger.is_empty());
+        assert_eq!(result.state_changes_used, 0);
+        assert_eq!(adapter.calls(), 1);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn out_of_scope_cleanup_blocks_primary_before_adapter_io() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        t.steps[0].requirements.state_change = true;
+        t.steps[0].cleanup = Some(CleanupSpec {
+            operation: StepOperation::Tool {
+                action: ToolAction::HttpGet {
+                    url: "https://outside.test/restore".into(),
+                },
+            },
+            description: "restore outside declared scope".into(),
+            idempotent: true,
+        });
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+
+        let error = engine(dir.path(), adapter.clone())?
+            .execute("run", &t, ObservedState::default())
+            .await
+            .expect_err("out-of-scope cleanup must disable the chain");
+
+        assert!(error.to_string().contains("cleanup denied by policy"));
+        assert_eq!(adapter.calls(), 0);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn unavailable_cleanup_adapter_blocks_primary_before_adapter_io() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        t.steps[0].requirements.state_change = true;
+        t.steps[0].cleanup = Some(CleanupSpec {
+            operation: StepOperation::External {
+                adapter: "missing-cleanup".into(),
+                operation: "restore".into(),
+                input: json!({}),
+                receipt_action: ToolAction::HttpGet {
+                    url: "https://example.test/restore".into(),
+                },
+            },
+            description: "restore through required adapter".into(),
+            idempotent: true,
+        });
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+
+        let error = engine(dir.path(), adapter.clone())?
+            .execute("run", &t, ObservedState::default())
+            .await
+            .expect_err("missing cleanup adapter must disable the chain");
+
+        assert!(error.to_string().contains("cleanup adapter unavailable"));
+        assert_eq!(adapter.calls(), 0);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn cancellation_never_schedules_failure_branch() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let t = ChainTemplate {
+            id: "cancelled".into(),
+            version: 1,
+            title: "cancelled".into(),
+            category: "test".into(),
+            description: "cancelled".into(),
+            observed_prerequisites: vec![],
+            required_capabilities: BTreeSet::new(),
+            steps: vec![step("primary", "a"), step("fallback", "b")],
+            edges: vec![CausalEdge {
+                from: "primary".into(),
+                to: "fallback".into(),
+                condition: EdgeCondition::OnFailure,
+                priority: 0,
+                exclusive: true,
+                rationale: "ordinary failure fallback".into(),
+            }],
+        };
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+        let e = engine(dir.path(), adapter.clone())?;
+        e.cancel();
+
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["primary"].status, StepStatus::Cancelled);
+        assert!(!result.steps.contains_key("fallback"));
+        assert!(result.traversed_edges.is_empty());
+        assert!(result.quarantined);
+        assert_eq!(adapter.calls(), 0);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pending_intent_without_receipt_is_indeterminate_and_never_repeated() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+        let e = engine(dir.path(), adapter.clone())?;
+        seed_pending_primary_intent(&e, &t)?;
+
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::Indeterminate);
+        assert_eq!(
+            adapter.calls(),
+            0,
+            "pending intent must suppress adapter I/O"
+        );
+        assert_eq!(
+            result.execution_intents["first::primary"].resolution,
+            Some(IntentResolution::Indeterminate)
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pending_intent_recovers_one_exact_sealed_receipt_without_rerun() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+        let e = engine(dir.path(), adapter.clone())?;
+        seed_pending_primary_intent(&e, &t)?;
+        let receipt = make_receipt(
+            "chain-primary",
+            t.steps[0].operation.receipt_action().clone(),
+            true,
+        )?;
+        adapter.add_inventory(receipt.clone());
+
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::Succeeded);
+        assert_eq!(result.steps["first"].receipt_ids, vec![receipt.id]);
+        assert_eq!(adapter.calls(), 0);
+        assert_eq!(
+            result.execution_intents["first::primary"].resolution,
+            Some(IntentResolution::Recovered)
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pending_intent_rejects_ambiguous_exact_receipts() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+        let e = engine(dir.path(), adapter.clone())?;
+        seed_pending_primary_intent(&e, &t)?;
+        for sequence in 1..=2 {
+            adapter.add_inventory(make_receipt_with_data(
+                "run",
+                "chain-primary",
+                t.steps[0].operation.receipt_action().clone(),
+                true,
+                json!({"observed": true, "sequence": sequence}),
+            )?);
+        }
+
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::FailedExecution);
+        assert!(result.steps["first"].message.contains("multiple exact"));
+        assert_eq!(adapter.calls(), 0);
+        assert_eq!(
+            result.execution_intents["first::primary"].resolution,
+            Some(IntentResolution::Ambiguous)
+        );
+        Ok(())
+    }
+    #[tokio::test]
+    async fn pending_intent_rejects_cross_run_and_cross_actor_receipts() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+        let e = engine(dir.path(), adapter.clone())?;
+        seed_pending_primary_intent(&e, &t)?;
+        let action = t.steps[0].operation.receipt_action().clone();
+        adapter.add_inventory(make_receipt_with_data(
+            "other-run",
+            "chain-primary",
+            action.clone(),
+            true,
+            json!({"observed": true}),
+        )?);
+        adapter.add_inventory(make_receipt_with_data(
+            "run",
+            "other-actor",
+            action,
+            true,
+            json!({"observed": true}),
+        )?);
+
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::Indeterminate);
+        assert_eq!(adapter.calls(), 0);
+        assert!(result.steps["first"].receipt_ids.is_empty());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn fresh_intent_baseline_excludes_wrong_run_actor_and_action() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]));
+        let action = t.steps[0].operation.receipt_action().clone();
+        adapter.add_inventory(make_receipt_with_data(
+            "other-run",
+            "chain-primary",
+            action.clone(),
+            true,
+            json!({"observed": true}),
+        )?);
+        adapter.add_inventory(make_receipt_with_data(
+            "run",
+            "other-actor",
+            action,
+            true,
+            json!({"observed": true}),
+        )?);
+        adapter.add_inventory(make_receipt_with_data(
+            "run",
+            "chain-primary",
+            ToolAction::HttpGet {
+                url: "https://example.test/different".into(),
+            },
+            true,
+            json!({"observed": true}),
+        )?);
+
+        let result = engine(dir.path(), adapter)?
+            .execute("run", &t, ObservedState::default())
+            .await?;
+
+        assert!(result.execution_intents["first::primary"]
+            .prior_receipt_ids
+            .is_empty());
+        assert_eq!(result.steps["first"].status, StepStatus::Succeeded);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn semantic_replay_mismatch_fails_typed_predicate() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        t.steps[0].replay = ReplayGate {
+            required: true,
+            independent_actor: "independent".into(),
+            predicate: ReplayPredicate::JsonPointerEquals {
+                pointer: "/observed".into(),
+                expected: json!(true),
+            },
+        };
+        let adapter = Arc::new(
+            MockAdapter::new(vec![Ok(true), Ok(true)])
+                .with_data(vec![json!({"observed": true}), json!({"observed": false})]),
+        );
+
+        let result = engine(dir.path(), adapter.clone())?
+            .execute("run", &t, ObservedState::default())
+            .await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::FailedReplay);
+        assert!(result.steps["first"]
+            .message
+            .contains("typed replay predicate"));
+        assert_eq!(adapter.calls(), 2);
+        Ok(())
+    }
+    #[tokio::test]
+    async fn primary_must_independently_satisfy_replay_predicate() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        t.steps[0].replay = ReplayGate {
+            required: true,
+            independent_actor: "independent".into(),
+            predicate: ReplayPredicate::JsonPointerEquals {
+                pointer: "/observed".into(),
+                expected: json!(true),
+            },
+        };
+        let adapter = Arc::new(
+            MockAdapter::new(vec![Ok(true), Ok(true)])
+                .with_data(vec![json!({"observed": false}), json!({"observed": true})]),
+        );
+
+        let result = engine(dir.path(), adapter.clone())?
+            .execute("run", &t, ObservedState::default())
+            .await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::FailedReplay);
+        assert!(result.steps["first"].message.contains("primary receipt"));
+        assert_eq!(
+            adapter.calls(),
+            1,
+            "replay must not run after primary mismatch"
+        );
+        assert!(!result.execution_intents.contains_key("first::replay"));
+        Ok(())
+    }
+    #[tokio::test]
     async fn resume_is_atomic_and_does_not_rerun() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let adapter = Arc::new(MockAdapter::new(vec![Ok(true), Ok(true)]));
-        let e = engine(dir.path(), adapter)?;
+        let e = engine(dir.path(), adapter.clone())?;
         let first = e
             .execute("run", &template(), ObservedState::default())
             .await?;
         let used = first.steps_used;
+        let calls = adapter.calls();
         let resumed = e
             .execute("run", &template(), ObservedState::default())
             .await?;
         assert_eq!(resumed.steps_used, used);
+        assert_eq!(adapter.calls(), calls);
         Ok(())
     }
     #[test]
@@ -1806,6 +3291,18 @@ mod tests {
         assert!(catalog.iter().all(|c| !c
             .eligibility(&ObservedState::default(), &BTreeSet::new(), &policy)
             .enabled));
+        Ok(())
+    }
+    #[test]
+    fn state_changing_step_without_cleanup_is_ineligible() -> Result<()> {
+        let mut t = template();
+        t.steps[0].requirements.state_change = true;
+        let eligibility = t.eligibility(&ObservedState::default(), &BTreeSet::new(), &policy()?);
+        assert!(!eligibility.enabled);
+        assert!(eligibility
+            .reasons
+            .iter()
+            .any(|reason| reason.contains("no authored idempotent cleanup")));
         Ok(())
     }
     #[tokio::test]
@@ -1828,6 +3325,40 @@ mod tests {
         assert_eq!(result.steps["first"].status, StepStatus::Unsupported);
         Ok(())
     }
+    #[tokio::test]
+    async fn external_receipt_requires_exact_intent_and_operation_binding() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let mut t = template();
+        t.steps.truncate(1);
+        t.edges.clear();
+        t.steps[0].operation = StepOperation::External {
+            adapter: "mock".into(),
+            operation: "read".into(),
+            input: json!({"tenant": "expected"}),
+            receipt_action: ToolAction::HttpGet {
+                url: "https://example.test/".into(),
+            },
+        };
+        let adapter = Arc::new(MockAdapter::new(vec![Ok(true)]).with_data(vec![json!({
+            "observed": true,
+            "metisblack_execution_binding": {
+                "intent_id": "intent-wrong",
+                "operation_fingerprint": hash(b"different external input")
+            }
+        })]));
+        let mut e = engine(dir.path(), Arc::new(MockAdapter::new(vec![])))?;
+        e.register_adapter(adapter.clone())?;
+
+        let result = e.execute("run", &t, ObservedState::default()).await?;
+
+        assert_eq!(result.steps["first"].status, StepStatus::FailedExecution);
+        assert!(result.steps["first"]
+            .message
+            .contains("external receipt execution binding mismatch"));
+        assert_eq!(adapter.calls(), 1);
+        assert!(result.steps["first"].receipt_ids.is_empty());
+        Ok(())
+    }
     #[test]
     fn fabricated_receipt_and_unconnected_causal_dependency_are_rejected() -> Result<()> {
         let mut receipt = make_receipt(
@@ -1842,6 +3373,73 @@ mod tests {
         let mut t = template();
         t.edges.clear();
         assert!(t.validate().is_err());
+        Ok(())
+    }
+    #[test]
+    fn replay_predicate_contract_is_strict_and_bounded() -> Result<()> {
+        assert!(serde_json::from_value::<ReplayPredicate>(json!({
+            "kind": "successful",
+            "unexpected": true
+        }))
+        .is_err());
+
+        let mut t = template();
+        t.steps[0].replay.predicate = ReplayPredicate::JsonPointerEquals {
+            pointer: format!("/{}", "a".repeat(1_024)),
+            expected: json!(true),
+        };
+        assert!(t.validate().is_err());
+
+        t.steps[0].replay.predicate = ReplayPredicate::JsonPointerEquals {
+            pointer: "/bad~2escape".into(),
+            expected: json!(true),
+        };
+        assert!(t.validate().is_err());
+
+        t.steps[0].replay.predicate = ReplayPredicate::JsonPointerEquals {
+            pointer: "/value".into(),
+            expected: json!("x".repeat(65_536)),
+        };
+        assert!(t.validate().is_err());
+        Ok(())
+    }
+    #[test]
+    fn replay_actor_cannot_equal_primary_actor() {
+        let mut t = template();
+        t.steps[0].replay.required = true;
+        t.steps[0].replay.independent_actor = "chain-primary".into();
+        assert!(t.validate().is_err());
+    }
+    #[test]
+    fn default_replay_predicate_preserves_stable_template_hash() -> Result<()> {
+        let t = template();
+        let serialized = serde_json::to_value(&t)?;
+        assert!(serialized["steps"]
+            .as_array()
+            .context("steps array")?
+            .iter()
+            .all(|step| step["replay"].get("predicate").is_none()));
+        assert_eq!(
+            t.hash()?,
+            "59727a3971a8cd1b96e2a428f6af7bffcb3cab8bb6aabf184f6e43207f4a9a43",
+            "default predicate must not perturb legacy template hashes"
+        );
+        Ok(())
+    }
+    #[test]
+    fn legacy_cleanup_does_not_gain_implicit_idempotence() -> Result<()> {
+        let cleanup: CleanupSpec = serde_json::from_value(json!({
+            "operation": {
+                "kind": "tool",
+                "action": {
+                    "tool": "http_get",
+                    "url": "https://example.test/"
+                }
+            },
+            "description": "legacy cleanup"
+        }))?;
+        assert!(!cleanup.idempotent);
+        assert!(serde_json::to_value(&cleanup)?.get("idempotent").is_none());
         Ok(())
     }
 }

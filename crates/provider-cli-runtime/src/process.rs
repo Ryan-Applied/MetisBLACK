@@ -20,7 +20,7 @@ use tokio::{
 const CHILD_REAP_GRACE: Duration = Duration::from_secs(1);
 // Allow enough scheduler slack for heavily parallel CI while remaining
 // strictly bounded when a descendant retains inherited pipe handles.
-const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(3);
+const PIPE_DRAIN_GRACE: Duration = Duration::from_secs(10);
 
 pub(crate) struct ProcessRequest {
     pub executable: PathBuf,
@@ -139,6 +139,7 @@ pub(crate) async fn run_process(request: ProcessRequest) -> Result<ProcessCaptur
     let mut child = command
         .spawn()
         .with_context(|| format!("failed to spawn {}", request.executable.display()))?;
+    let execution_started = Instant::now();
     let stdout = child
         .stdout
         .take()
@@ -186,12 +187,6 @@ pub(crate) async fn run_process(request: ProcessRequest) -> Result<ProcessCaptur
             let _ = child.start_kill();
             break None;
         }
-        if started.elapsed() >= request.timeout {
-            timed_out = true;
-            direct_child_termination_attempted = true;
-            let _ = child.start_kill();
-            break None;
-        }
         if overflow.load(Ordering::SeqCst) {
             output_overflowed = true;
             direct_child_termination_attempted = true;
@@ -200,6 +195,12 @@ pub(crate) async fn run_process(request: ProcessRequest) -> Result<ProcessCaptur
         }
         match child.try_wait() {
             Ok(Some(status)) => break Some(status),
+            Ok(None) if execution_started.elapsed() >= request.timeout => {
+                timed_out = true;
+                direct_child_termination_attempted = true;
+                let _ = child.start_kill();
+                break None;
+            }
             Ok(None) => sleep(Duration::from_millis(10)).await,
             Err(error) => {
                 direct_child_termination_attempted = true;
@@ -327,6 +328,27 @@ async fn finish_reader(mut reader: JoinHandle<Result<()>>) -> ReaderDrain {
             error: Some(format!("output reader task failed: {error}")),
         },
         Err(_) => {
+            // Prefer an output reader that completed at the deadline boundary.
+            // A heavily loaded executor can wake the timeout before polling an
+            // already-readable EOF; one scheduler yield distinguishes that
+            // case from a descendant that still owns the pipe.
+            tokio::task::yield_now().await;
+            if reader.is_finished() {
+                return match reader.await {
+                    Ok(Ok(())) => ReaderDrain {
+                        aborted: false,
+                        error: None,
+                    },
+                    Ok(Err(error)) => ReaderDrain {
+                        aborted: false,
+                        error: Some(error.to_string()),
+                    },
+                    Err(error) => ReaderDrain {
+                        aborted: false,
+                        error: Some(format!("output reader task failed: {error}")),
+                    },
+                };
+            }
             reader.abort();
             // Await cancellation so the pipe handle is definitely dropped;
             // merely requesting abort can leave the read future alive until a

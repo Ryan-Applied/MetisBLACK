@@ -52,7 +52,7 @@ is not modified or invoked by this workspace.
 | TUI / REPL | Basic | TUI shows polling-based progress with pause/cancel; REPL uses whitespace splitting and is not a full shell parser |
 | Integrations | Explicit audited summary publication | GitHub issue comment, GitLab merge-request note, and Jira comment payloads; publication requires run authorization or the `authorization` override and uses an operation ID/idempotency key plus local outcome audit. No automatic publication or receipt upload |
 | Test account lifecycle | Creation and ledger only | Typed `create_account` generates a vault-backed password, consumes state/account budgets, and records pending cleanup. No generic target-specific login verification or automatic cleanup request |
-| Attack chains | Implemented, opt-in and bounded | Validated typed DAGs, receipt prerequisites/dependencies/integrity, capability/scope/risk/state budgets, independent replay, branching/backtracking, deduplication, atomic resume, rollback ledger, attack-graph artifacts, and 18 inert-until-observed templates across web/auth/API/cloud/source/host/AI | Templates are conservative validation chains, not a comprehensive exploit framework. Cloud templates require a registered typed replay adapter and remain disabled in the shared orchestrator today; model prose cannot invent causal edges |
+| Attack chains | Implemented, opt-in and bounded | Validated typed DAGs, receipt prerequisites/dependencies/integrity, capability/scope/risk/state budgets, explicit cleanup eligibility, independent semantic replay, branching/backtracking, deduplication, checkpoint-scoped single-writer execution, durable primary/replay/cleanup intents, exact operation-bound recovery, outcome-unknown quarantine, rollback ledger, attack-graph artifacts, and 18 inert-until-observed templates across web/auth/API/cloud/source/host/AI | Templates are conservative validation chains, not a comprehensive exploit framework. Typed loot extraction, dynamic graph materialization, full lifecycle retest/reporting, authenticated replay-principal separation and operator-directed ambiguous-state reconciliation remain open. Cloud templates require a registered typed replay adapter and remain disabled in the shared orchestrator today; model prose cannot invent causal edges |
 
 ## Finding-state contract
 
@@ -92,16 +92,18 @@ resume, canonical path coverage, and real-loopback open-redirect crash/retry and
 replay/retest fixtures. E04-S03 additionally covers strict receipt-derived OpenAPI
 v2/v3 JSON/YAML contracts, bounded value-free probing, durable primary/replay/retest
 recovery, exact tamper rejection and report-visible inconclusive coverage. The
-current locked local matrix passes 311 non-ignored tests; the two authenticated
+current locked local matrix passes 331 non-ignored tests; the two authenticated
 subscription probes are deliberately ignored by the fixture matrix and were run
 separately against Claude Code `2.1.283` and Codex CLI `0.147.0`, both passing in
 unrestricted mode with their exact dangerous flags. Local formatting, all-target
 checking and strict Clippy also pass. `cargo deny` is not installed on this host,
 so dependency-policy verification remains a CI gate. GitHub Actions run
-[`36273283530`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36273283530)
-passes E04-S03 acceptance commit `8c146ad`, including the strict quality and
+[`36277987141`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36277987141)
+passes final-head commit `6f45b98`, including the strict quality and
 dependency-policy jobs and locked Rust 1.88 tests on Ubuntu, macOS 14 arm64 and
-Windows.
+Windows. The optimized local macOS arm64 `metisblack 0.1.0` build has SHA-256
+`7f94f8d970c2c9d693f884ea1271bd1abdbe38f2267a9553b87e78678f4c0086`;
+it is not a signed or published release artifact.
 CI is configured to run:
 
 ```bash

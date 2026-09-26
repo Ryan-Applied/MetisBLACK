@@ -2848,10 +2848,14 @@ impl Engine {
         probe_stage: &str,
     ) -> Result<Option<Receipt>> {
         let failed_stage = format!("failed:{probe_stage}");
-        ensure!(
-            !self.snapshot.completed_targets.contains(&failed_stage),
-            "open-redirect probe stage previously failed; resume requires --retry-failed-stages"
-        );
+        let retry_pending = self.stage_retry_pending(&failed_stage);
+        if self.snapshot.completed_targets.contains(&failed_stage) && !retry_pending {
+            // Preserve the explicit no-repeat boundary without making one
+            // inconclusive probe permanently block every unrelated stage on
+            // resume. `--retry-failed-stages` is still required to contact
+            // this endpoint/parameter pair again.
+            return Ok(None);
+        }
 
         let intents_dir = self
             .snapshot
@@ -2860,8 +2864,6 @@ impl Engine {
             .join("open-redirect-intents");
         secure_dir(&intents_dir)?;
         let intent_path = intents_dir.join(format!("intent-{}.json", hash(probe_stage.as_bytes())));
-        let retry_pending = self.stage_retry_pending(&failed_stage);
-
         let receipt = if retry_pending {
             self.consume_stage_retry(&failed_stage)?;
             let action = ToolAction::OpenRedirectProbe {
@@ -3048,6 +3050,15 @@ impl Engine {
             "the transport or policy operation produced an unsuccessful receipt"
         };
         self.record_open_redirect_failure(&failed_stage, Some(&receipt.id), reason)?;
+        if receipt.output.successful {
+            // A well-formed HTTP response can be neutral for this exact
+            // predicate (for example, a 400 rejecting the canary syntax). It
+            // proves neither presence nor absence, but it is not an ambiguous
+            // transport outcome and must not abort unrelated probes in the
+            // same bounded run. The failed-stage marker still prevents an
+            // automatic retry and preserves the explicit retry requirement.
+            return Ok(None);
+        }
         anyhow::bail!(
             "open-redirect probe was indeterminate; inspect receipt {} and explicitly retry the failed stage if appropriate",
             receipt.id
@@ -9296,8 +9307,8 @@ mod tests {
         let receipt_count = engine.runtime.evidence.manifest()?.len();
         assert!(engine
             .run_open_redirect_probe(&endpoint, "next", &stage)
-            .await
-            .is_err());
+            .await?
+            .is_none());
         assert_eq!(engine.runtime.evidence.manifest()?.len(), receipt_count);
 
         assert_eq!(engine.retry_failed_stages()?, 1);
@@ -9324,6 +9335,60 @@ mod tests {
         assert!(engine.snapshot.decisions.iter().any(|decision| {
             decision["action"] == "retry_stage_consumed" && decision["stage"] == failed
         }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_redirect_http_inconclusive_is_recorded_without_aborting_other_work() -> Result<()>
+    {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let endpoint = format!("http://{}/redirect", listener.local_addr()?);
+        let target = format!("{endpoint}?next=%2Fhome");
+        let contacts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let server_contacts = contacts.clone();
+        let server = tokio::spawn(async move {
+            if let Ok((mut stream, _)) = listener.accept().await {
+                server_contacts.fetch_add(1, Ordering::SeqCst);
+                let mut buffer = [0u8; 4096];
+                let _ = stream.read(&mut buffer).await;
+                let body = br#"{"error":"invalid redirect value"}"#;
+                let response = format!(
+                    "HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(response.as_bytes()).await;
+                let _ = stream.write_all(body).await;
+            }
+        });
+        let output = tempfile::tempdir()?;
+        let mut config = default_config(Mode::Blackbox, vec![target], output.path().into())?;
+        config.authorized = true;
+        config.scope.requests_per_second = 100;
+        let mut engine = Engine::new(config)?;
+        let stage = stage_key("open-redirect-probe", &(endpoint.as_str(), "next"))?;
+        let failed = format!("failed:{stage}");
+
+        assert!(engine
+            .run_open_redirect_probe(&endpoint, "next", &stage)
+            .await?
+            .is_none());
+        server.await?;
+
+        assert_eq!(contacts.load(Ordering::SeqCst), 1);
+        assert!(engine.snapshot.completed_targets.contains(&failed));
+        assert!(!engine.snapshot.completed_targets.contains(&stage));
+        assert!(engine.snapshot.decisions.iter().any(|decision| {
+            decision["action"] == "open_redirect_probe_indeterminate"
+                && decision["stage"] == failed
+                && decision["retry_requires_explicit_operator_decision"] == true
+        }));
+        assert!(engine
+            .snapshot
+            .limitations
+            .iter()
+            .any(|limitation| { limitation.contains("No negative coverage claim was made") }));
         Ok(())
     }
 
