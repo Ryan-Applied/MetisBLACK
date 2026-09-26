@@ -500,7 +500,8 @@ fn explicit_login_profile_is_copied_and_blanket_inheritance_requires_unrestricte
         .descriptor("fixture")
         .unwrap()
         .environment_names
-        .contains(&"PATH".into()));
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case("PATH")));
 
     let safe_descriptor = runtime(
         SubscriptionCliKind::Claude,
