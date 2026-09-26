@@ -966,6 +966,10 @@ pub struct DiffContext {
 }
 impl DiffContext {
     pub fn introduced(&self, relative: &str, line: usize) -> bool {
+        #[cfg(windows)]
+        let relative = relative.replace('\\', "/");
+        #[cfg(windows)]
+        let relative = relative.as_str();
         self.changed_lines.get(relative).is_some_and(|ranges| {
             ranges
                 .iter()
