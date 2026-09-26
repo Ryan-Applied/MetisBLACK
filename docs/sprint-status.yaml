@@ -18,5 +18,5 @@ stories:
     owner: "cloud-runtime swarm"
   E12-S01:
     file: "docs/stories/story-E12-S01.md"
-    status: "code-complete-awaiting-ci"
+    status: "done"
     owner: "orchestrator"

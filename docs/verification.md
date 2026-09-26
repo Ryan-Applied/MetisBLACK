@@ -48,18 +48,18 @@ receipts, and Markdown/HTML/JSON/SARIF reports. This directory is ignored by Git
 Legacy migration and validation both passed for 435 playbooks in seven categories.
 One incomplete-heading warning was retained for `meta/role_pentestfull`.
 
-CI now defines locked all-feature platform lanes for Ubuntu, macOS arm64 and
-Windows in addition to the strict Linux quality and dependency-policy jobs. These
-lanes remain configuration evidence until a remote GitHub run completes.
+CI defines locked all-feature platform lanes for Ubuntu, macOS 14 arm64 and
+Windows in addition to the strict quality and dependency-policy jobs. GitHub
+Actions run
+[`36265174263`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265174263)
+passed all five jobs from commit `72676d3` using the declared Rust 1.88 MSRV.
 
-Not executed locally: `cargo deny check` (cargo-deny is not installed), remote CI,
-live provider authentication, real provider-cloud accounts, a real WebDriver,
+Not executed locally: `cargo deny check` (cargo-deny is not installed), live
+provider authentication, real provider-cloud accounts, a real WebDriver,
 authenticated application workflows, or broad real-target exploit reproduction.
 The live backends are therefore implementation- and mock-verified, not
 environment-certified. See `implementation-status.md` for the precise capability
 boundary.
 
-The outer repository's tracked files remain unchanged; its status lists only the
-new `MetisBLACK/` directory. The nested CI workflow becomes active when this
-directory is published as a repository root, not while it remains nested in the
-unchanged original repository.
+The outer repository's tracked files remain unchanged. `MetisBLACK/` is published
+as its own repository root, where the nested workflow is active.

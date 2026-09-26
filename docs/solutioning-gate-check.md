@@ -11,14 +11,14 @@ the architecture is suitable, but the full parity program is not release-ready.
 | Immutable evidence and truthful states | evidence, storage, orchestrator | Receipt hashes, replay and finding transition tests | Pass for supported predicates |
 | Browser automation | browser-runtime | W3C plans, isolation, artifacts, cancellation | Partial: modern network and role workflows |
 | Web validation breadth | tool-runtime, orchestrator | Typed HTTP and narrow header/cookie predicates | Missing broad modules |
-| Source and grey-box analysis | source-analysis, orchestrator | Inventory, dependencies, line rules, route literals | Missing robust flow/framework models |
+| Source and grey-box analysis | source-analysis, orchestrator | Inventory, dependencies, route literals and conservative lexical flow traces | Missing robust interprocedural/framework models |
 | Host and Active Directory | tool-runtime, orchestrator | TCP inventory | Missing protocol and credentialed adapters |
-| Live cloud assessment | cloud-runtime, orchestrator | Identity-verified read-only provider workflows | Missing IAM reachability and controlled validation |
+| Live cloud assessment | cloud-runtime, orchestrator | Identity-verified read-only workflows and evidence-backed IAM reachability | Missing controlled validation breadth and live certification |
 | AI/MCP/workflow validation | orchestrator, providers | Two benign endpoint probes and static review | Missing scenario/judge/replay harness |
 | Multimodel validation | providers, model-panel | Heterogeneous quorum, dissent and failure isolation | Partial provider/telemetry breadth |
 | Attack chains | chain-engine, orchestrator | Typed DAG/replay/rollback and 18 templates | Partial adapter and primitive breadth |
 | SDLC integrations | integrations, app | Audited comment publication | Missing remote lifecycle automation |
-| Production operations | app, storage, CI | Checkpoints, local vault, Unix CI | Missing sandbox/KMS/migrations/platform matrix/signing |
+| Production operations | app, storage, CI | Checkpoints, local vault and verified Linux/macOS/Windows CI | Missing sandbox/KMS/migrations/signing/live-lab certification |
 
 ## Architecture decisions
 

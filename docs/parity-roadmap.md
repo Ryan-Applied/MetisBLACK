@@ -55,3 +55,8 @@ A capability is complete only when all applicable gates pass:
 
 The repository baseline is 148 passing local tests. This proves the existing
 bounded contracts and fixtures, not production parity or live external behavior.
+GitHub Actions run
+[`36265174263`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265174263)
+also passes the locked Rust 1.88 workspace on Ubuntu, macOS 14 arm64 and Windows,
+the strict quality lane and dependency policy. This completes story E12-S01 but
+not the remaining E12 live-lab, signing, provenance, SBOM or automation work.

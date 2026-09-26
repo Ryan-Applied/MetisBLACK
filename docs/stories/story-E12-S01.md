@@ -16,5 +16,10 @@ hide the others.
 
 ## Current evidence
 
-The workflow definition is implemented. Local macOS testing is evidence for the
-current host only; no remote run is recorded in this story yet.
+Complete. GitHub Actions run
+[`36265174263`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36265174263)
+passed from commit `72676d3` with independent green results for Ubuntu, macOS 14
+arm64 and Windows, plus the strict format/check/test/Clippy and dependency-policy
+jobs. The Windows lane ran all 148 tests on Rust 1.88; platform-sensitive fixtures
+use native legal paths and scheduling assertions measure observed concurrency
+instead of relying on wall-clock thresholds.
