@@ -1625,7 +1625,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
         init_repo(directory.path())?;
         write(&directory.path().join("rename me.txt"), "same content\n")?;
         write(&directory.path().join("delete-me.txt"), "obsolete\n")?;
+        #[cfg(unix)]
         let weird = "odd\tname\nline.rs";
+        #[cfg(windows)]
+        let weird = "odd name ü.rs";
         write(&directory.path().join(weird), "fn old() {}\n")?;
         let base = commit(directory.path(), "base")?;
 
@@ -1701,7 +1704,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             &repository.path().join("nested/deeper/file.txt"),
             "nested\n",
         )?;
-        write(&repository.path().join("nested/odd\tname.txt"), "odd\n")?;
+        #[cfg(unix)]
+        let odd_path = "nested/odd\tname.txt";
+        #[cfg(windows)]
+        let odd_path = "nested/odd name ü.txt";
+        write(&repository.path().join(odd_path), "odd\n")?;
         write(&repository.path().join(".env"), "api_key=not-exported\n")?;
         let head = commit(repository.path(), "nested")?;
         let output = tempfile::tempdir()?;
@@ -1711,10 +1718,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
             fs::read_to_string(snapshot.join("nested/deeper/file.txt"))?,
             "nested\n"
         );
-        assert_eq!(
-            fs::read_to_string(snapshot.join("nested/odd\tname.txt"))?,
-            "odd\n"
-        );
+        assert_eq!(fs::read_to_string(snapshot.join(odd_path))?, "odd\n");
         assert!(!snapshot.join(".env").exists());
         let error = export_commit(repository.path(), &head, &snapshot).unwrap_err();
         assert!(error.to_string().contains("already exists"));
