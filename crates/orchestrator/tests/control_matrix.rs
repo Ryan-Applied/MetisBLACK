@@ -231,6 +231,7 @@ async fn admitted(control: Control, mut overrides: ExpertOverrides) -> Result<bo
             let mut runtime =
                 tool_runtime::Runtime::new(policy(scoped, overrides)?, store, redactor);
             runtime.authorize(true);
+            #[cfg(unix)]
             let (program, args) = if control == Control::Timeouts {
                 ("/bin/sleep", vec!["0.04".into()])
             } else {
@@ -241,6 +242,16 @@ async fn admitted(control: Control, mut overrides: ExpertOverrides) -> Result<bo
                         "-c".into(),
                         "printf %s \"$METISBLACK_MATRIX_MARKER\"".into(),
                     ],
+                )
+            };
+            #[cfg(windows)]
+            let (program, args) = if control == Control::Timeouts {
+                ("cmd", vec!["/C".into(), "ping -n 2 127.0.0.1 >NUL".into()])
+            } else {
+                std::env::set_var("METISBLACK_MATRIX_MARKER", "matrix-only");
+                (
+                    "cmd",
+                    vec!["/C".into(), "echo %METISBLACK_MATRIX_MARKER%".into()],
                 )
             };
             let receipt = runtime
@@ -256,7 +267,9 @@ async fn admitted(control: Control, mut overrides: ExpertOverrides) -> Result<bo
             if control == Control::Timeouts {
                 receipt.output.successful
             } else {
-                receipt.output.data["stdout"] == "matrix-only"
+                receipt.output.data["stdout"]
+                    .as_str()
+                    .is_some_and(|stdout| stdout.trim() == "matrix-only")
             }
         }
     })
