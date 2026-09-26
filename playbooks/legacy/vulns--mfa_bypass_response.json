@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/mfa_bypass_response",
+  "version": "1.0.0",
+  "title": "MFA Bypass (Response Manipulation) Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-287"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# MFA Bypass (Response Manipulation) Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for MFA bypass via response/flag manipulation.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Map MFA step\n- Capture the verify-OTP request/response and any success flags\n\n### 2. Manipulate\n- Flip response booleans, drop the MFA step, replay a success response, brute OTP if no lockout\n\n### 3. Confirm\n- Reach an authenticated session without a valid second factor\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: MFA Bypass (Response Manipulation) Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-287\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Second factor bypassed, enabling login with only first factor\n- Remediation: Server-side enforcement of MFA state, never trust client flags, atomic auth state\n```\n\n## System Prompt\nYou are an MFA specialist. Report only when you obtain an authenticated session bypassing a genuinely-enforced MFA, evidenced by post-auth access. UI-only MFA that the server never enforced is a separate (still valid) finding — state it precisely.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/mfa_bypass_response.md",
+  "warnings": []
+}

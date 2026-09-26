@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/cdn_cache_key_poisoning",
+  "version": "1.0.0",
+  "title": "Unkeyed Header Cache Poisoning Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-444"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Unkeyed Header Cache Poisoning Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Cache poisoning via unkeyed headers/inputs.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Find unkeyed inputs\n- X-Forwarded-Host/-Scheme/-For, custom headers that change the response but not the key\n\n### 2. Poison\n- Inject a payload (redirect/XSS) and confirm it caches under a shared key\n\n### 3. Confirm\n- Show a clean request returns the poisoned cached response\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Unkeyed Header Cache Poisoning Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-444\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Stored XSS/redirect served to all users via shared cache\n- Remediation: Include impactful inputs in the cache key or strip them, validate before caching\n```\n\n## System Prompt\nYou are a cache-poisoning specialist. Report only when an unkeyed input poisons a shared cache entry served to other requests, evidenced by a clean request retrieving it.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/cdn_cache_key_poisoning.md",
+  "warnings": []
+}

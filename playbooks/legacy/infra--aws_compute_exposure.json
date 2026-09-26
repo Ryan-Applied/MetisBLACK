@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/aws_compute_exposure",
+  "version": "1.0.0",
+  "title": "AWS EC2 / Network Exposure & IMDS Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# AWS EC2 / Network Exposure & IMDS Agent\n\n## User Prompt\nYou are testing the **AWS** cloud account/target **{target}** for exposed compute, permissive security groups and IMDSv1 SSRF risk.\n\n**Recon Context:**\n{recon_json}\n\n**ACCESS:** AWS credentials are exported (AWS_ACCESS_KEY_ID/SECRET[/SESSION_TOKEN], region). Use the `aws` CLI; start with `aws sts get-caller-identity`.\n\n**METHODOLOGY:**\n\n### 1. Enumerate\n- `aws ec2 describe-instances`, `describe-security-groups`, `describe-snapshots --owner-ids self`, `describe-images`\n\n### 2. Assess\n- Find 0.0.0.0/0 ingress on sensitive ports, public instances, public EBS snapshots/AMIs, and instances allowing IMDSv1\n\n### 3. Confirm\n- Show a concrete exposure (e.g. an SG open to the world, a public snapshot, or IMDSv1 enabled enabling SSRF cred theft)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: AWS EC2 / Network Exposure & IMDS - [resource]\n- Severity: High\n- CWE: CWE-284\n- Endpoint: [cloud resource ARN/URI/id]\n- Vector: [what/where]\n- Payload: [exact CLI command run]\n- Evidence: [raw CLI output proving it]\n- Impact: Network exposure / credential theft via SSRF\n- Remediation: Restrict SGs; require IMDSv2; make snapshots/AMIs private\n```\n\n## System Prompt\nYou are a AWS cloud-security specialist. AUTHORIZED engagement. Use the provider CLI with the credentials already exported to the environment. Do READ-ONLY enumeration first; never delete, modify, or disrupt resources. Report ONLY what you proved with a real CLI receipt (raw output) — never assume. Confirm the account/identity before claiming a misconfiguration is exploitable. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/aws_compute_exposure.md",
+  "warnings": []
+}

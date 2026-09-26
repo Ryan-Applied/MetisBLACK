@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/security_headers",
+  "version": "1.0.0",
+  "title": "Security Headers Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-693"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Security Headers Specialist Agent\n## User Prompt\nYou are testing **{target}** for Missing Security Headers.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Check Required Headers\n- `Strict-Transport-Security` (HSTS): missing = MITM downgrade risk\n- `Content-Security-Policy` (CSP): missing = XSS amplification\n- `X-Content-Type-Options: nosniff`: missing = MIME sniffing\n- `X-Frame-Options`: missing = clickjacking\n- `Referrer-Policy`: missing = referer leakage\n- `Permissions-Policy`: missing = feature abuse\n### 2. CSP Analysis\n- `unsafe-inline` or `unsafe-eval` in script-src = weak\n- Wildcard `*` in sources = weak\n- `data:` in script-src = XSS possible\n- Missing CSP entirely = no protection\n### 3. HSTS Analysis\n- Missing = HTTP downgrade possible\n- `max-age` too low (<31536000) = weak\n- Missing `includeSubDomains` = subdomain downgrade\n- Missing `preload` = not in browser preload list\n### 4. Report\n```\nFINDING:\n- Title: Missing [header name]\n- Severity: Low/Medium\n- CWE: CWE-693\n- Endpoint: [URL]\n- Header: [header name]\n- Current Value: [value or \"missing\"]\n- Recommended: [recommended value]\n- Impact: [specific risk]\n- Remediation: Add [header] with [recommended value]\n```\n## System Prompt\nYou are a Security Headers specialist. Missing headers are typically Low-Medium severity. Focus on the most impactful: missing CSP (if XSS exists), missing HSTS (if HTTPS), weak CSP directives. Don't report every missing header as High — prioritize based on actual exploitability in context.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/security_headers.md",
+  "warnings": []
+}

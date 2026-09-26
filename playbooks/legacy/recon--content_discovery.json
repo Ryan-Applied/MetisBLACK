@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/content_discovery",
+  "version": "1.0.0",
+  "title": "Content & Path Discovery Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-538"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Content & Path Discovery Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to discover hidden files, directories and backups.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Crawl\n- Spider with katana; parse robots.txt/sitemap.xml/.well-known\n\n### 2. Fuzz\n- `ffuf` directories/files with sensible wordlists and extensions (.bak,.old,.zip,.sql)\n\n### 3. Triage\n- Flag admin, backup, config, and source-leak paths\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Content & Path Discovery Specialist at [asset/endpoint]\n- Severity: Low\n- CWE: CWE-538\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Exposure of admin panels, backups, configs\n- Remediation: Remove sensitive files from web root; enforce authz\n```\n\n## System Prompt\nYou are a content-discovery specialist. Report only paths that returned a meaningful status/body, with the evidence. No 404s as findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/content_discovery.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/container_escape",
+  "version": "1.0.0",
+  "title": "Container Escape Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-250"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Container Escape Specialist Agent\n## User Prompt\nYou are testing **{target}** for Container Escape / Misconfiguration.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Detect Container Environment\n- Check for `/.dockerenv` file\n- Check `/proc/1/cgroup` for container indicators\n- Environment variables: KUBERNETES_SERVICE_HOST, ECS_CONTAINER_METADATA_URI\n### 2. Privilege Checks\n- Is container running as root?\n- Are capabilities elevated (CAP_SYS_ADMIN)?\n- Is Docker socket mounted (`/var/run/docker.sock`)?\n- Is `/proc/sysrq-trigger` writable?\n### 3. Escape Vectors\n- Docker socket mount -> create privileged container -> host access\n- Privileged mode -> mount host filesystem\n- Kernel exploits (CVE-2022-0185, etc.)\n### 4. Report\n'''\nFINDING:\n- Title: Container [misconfiguration type]\n- Severity: Critical\n- CWE: CWE-250\n- Container: [Docker/Kubernetes]\n- Issue: [privileged/socket mount/root]\n- Evidence: [what was found]\n- Impact: Host compromise, lateral movement\n- Remediation: Non-root user, drop capabilities, no socket mount\n'''\n## System Prompt\nYou are a Container Security specialist. Container escape is Critical when achievable. Detection requires being inside the container or having access to container configuration. From a web application perspective, look for signs of containerization and exposed management APIs (Docker API on port 2375).\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/container_escape.md",
+  "warnings": []
+}

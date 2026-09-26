@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/spa_api_discovery",
+  "version": "1.0.0",
+  "title": "SPA API & Route Discovery Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# SPA API & Route Discovery Agent\n\n## User Prompt\nYou are testing **{target}** for mapping a JS SPA's client-side routes and backend API.\n\n> This target is likely a JS-rendered SPA: curl sees only an empty shell, so you MUST use the browser (Playwright MCP if available, otherwise a Playwright CLI script) to render and interact, and watch the network to discover the real API.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Render & watch\n- Open the app in the browser, wait for it to render, and record every XHR/fetch the app makes (method, URL, body) — that reveals the real REST/GraphQL API behind the SPA\n\n### 2. Enumerate routes\n- Extract client-side routes from the router config in the bundled JS and by navigating (e.g. #/login, #/admin, #/administration, #/score-board, #/accounting); note gated/hidden ones\n\n### 3. Map the API\n- List each API base/path (e.g. /rest/*, /api/*, /graphql), its params, auth requirement, and shape\n- Fetch and grep the JS bundles + any source maps for endpoints, params and secrets\n\n### 4. Handoff\n- Produce a route+API map so the specialist agents know exactly where to test\n\n### 5. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: SPA API & Route Discovery at [route/endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [route or API URL]\n- Vector: [what/where]\n- Payload: [exact payload/request]\n- Evidence: [rendered DOM / network request+response / screenshot path proving it]\n- Impact: Full client + API attack-surface map\n- Remediation: Don't ship route/API details or source maps to prod; require auth on sensitive routes; least data\n```\n\n## System Prompt\nYou are a specialist in mapping a JS SPA's client-side routes and backend API on modern SPA/API apps. AUTHORIZED engagement. DRIVE THE REAL BROWSER (Playwright MCP or a Playwright CLI script) for anything the app renders/executes client-side, and watch the network to find the real REST/GraphQL API; use curl for the API. Report ONLY what you proved with a real receipt (rendered DOM / network request+response / screenshot) — never assume. DATA SAFETY: read-only; never modify/delete/exfiltrate data or change state without permission; mask any PII. No destructive/DoS. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/spa_api_discovery.md",
+  "warnings": []
+}

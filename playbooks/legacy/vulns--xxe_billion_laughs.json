@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/xxe_billion_laughs",
+  "version": "1.0.0",
+  "title": "XML Entity-Expansion DoS Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-776"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# XML Entity-Expansion DoS Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for XML entity expansion (billion laughs) denial of service.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Confirm DTD processing\n- Verify the parser processes internal DTDs\n\n### 2. Controlled test\n- Send a SMALL nested-entity payload (ROE permitting) and measure CPU/latency spike — never a full flood\n\n### 3. Confirm\n- Show disproportionate resource use from a tiny payload\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: XML Entity-Expansion DoS Specialist at [endpoint]\n- Severity: Medium\n- CWE: CWE-776\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Memory/CPU exhaustion crashing the XML parser/service\n- Remediation: Disable DTDs/entity expansion, set entity-expansion limits, size caps\n```\n\n## System Prompt\nYou are a parser-DoS specialist who never runs a real outage. Report only when a single controlled payload shows clear amplification (timing/resource evidence), proving missing limits. Respect ROE.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/xxe_billion_laughs.md",
+  "warnings": []
+}

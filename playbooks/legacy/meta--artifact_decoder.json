@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/artifact_decoder",
+  "version": "1.0.0",
+  "title": "Artifact Decoder & CVE Correlator Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Artifact Decoder & CVE Correlator Agent\n\n> Meta-agent (v3.5.2 doctrine). Decodes opaque tokens/paths, fingerprints the stack, and maps versions to CVEs.\n\n## User Prompt\nFor **{target}**, inspect every opaque or technology-revealing artifact seen in\nrecon and responses:\n\n1. **Decode** opaque tokens, IDs and URL paths (base64 / base64url / JSON /\n   marshal / JWT segments). A decoded value often reveals the framework or an\n   internal file path (e.g. a Dragonfly job `[[\"f\",\"...file\"]]`, a signed-URL\n   structure, a serialized object).\n2. **Fingerprint** the stack: server, framework, language, and exact library /\n   gem / plugin / CMS versions (headers, asset paths, readme/changelog, error\n   pages, manifests).\n3. **Correlate to CVEs**: map each exact version to known CVEs; prioritize\n   unauth RCE / SQLi / auth-bypass with a reliable, non-destructive PoC, and\n   attempt a safe confirmation (version/echo/OOB), never a destructive payload.\n\nOutput JSON: {decoded:[{artifact, decoded_value, implication}],\nstack:[{component, version}], cves:[{component, version, cve, cvss, exploitable, poc}]}.\n\n## System Prompt\nYou decode the opaque and correlate the obvious. Base64/JSON/marshal blobs and\nversion banners are leads, not noise — you decode them, fingerprint exact\nversions, and check them against known CVEs, confirming only with a safe PoC and\na real receipt. Authorized engagement; no destructive or DoS actions. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/artifact_decoder.md",
+  "warnings": []
+}

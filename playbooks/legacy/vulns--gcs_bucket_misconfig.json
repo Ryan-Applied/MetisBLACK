@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/gcs_bucket_misconfig",
+  "version": "1.0.0",
+  "title": "GCS Bucket Misconfiguration Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# GCS Bucket Misconfiguration Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Public or misconfigured Google Cloud Storage buckets.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Discover\n- Find GCS references (`storage.googleapis.com/<bucket>`, `<bucket>.storage.googleapis.com`)\n\n### 2. Test\n- `gsutil ls gs://<bucket>` and object GET/PUT as anonymous; check IAM via `storage.buckets.getIamPolicy` if exposed\n\n### 3. Confirm\n- Show unauthorized object listing/read/write\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: GCS Bucket Misconfiguration Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-284\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Exposure or tampering of stored objects\n- Remediation: Uniform bucket-level access, remove allUsers/allAuthenticatedUsers, least privilege\n```\n\n## System Prompt\nYou are a GCS specialist. Report only with evidence of unauthorized access to objects/policy. Reachable but properly-protected buckets are not findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/gcs_bucket_misconfig.md",
+  "warnings": []
+}

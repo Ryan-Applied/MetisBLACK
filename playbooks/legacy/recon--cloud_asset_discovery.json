@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/cloud_asset_discovery",
+  "version": "1.0.0",
+  "title": "Cloud Asset Discovery Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Cloud Asset Discovery Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to discover cloud buckets, functions and metadata surfaces.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Discover\n- Find S3/GCS/Azure references; permutate bucket names; detect cloud provider\n\n### 2. Probe\n- Check public list/read on storage; note SSRF-to-metadata potential\n\n### 3. Catalog\n- Record provider, asset, and access level\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Cloud Asset Discovery Specialist at [asset/endpoint]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Exposed cloud assets and SSRF/metadata vectors\n- Remediation: Lock down public cloud assets; enforce IMDSv2\n```\n\n## System Prompt\nYou are a cloud-recon specialist. Report only assets you confirmed exist with their observed access level. No guessed buckets.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/cloud_asset_discovery.md",
+  "warnings": []
+}

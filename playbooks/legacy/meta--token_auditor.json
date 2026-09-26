@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/token_auditor",
+  "version": "1.0.0",
+  "title": "Token & JWT Auditor Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Token & JWT Auditor Agent\n\n> Meta-agent (v3.5.2 doctrine). Attacks tokens: alg-confusion, none, kid/jku, signature checks, weak HS256 secrets.\n\n## User Prompt\nFor any session token or JWT issued by **{target}**, run a full auth-token audit:\n\n1. **Decode** the header/payload; note alg (HS*/RS*/none), kid, jku, exp, claims.\n2. **Algorithm attacks**: try `alg:none`, RS→HS confusion (sign with the public\n   key as HMAC secret), and kid/jku injection. Confirm whether the server\n   actually verifies the signature (tamper a claim and replay).\n3. **Weak secret**: for HS256, attempt to crack the signing secret offline\n   (wordlist/rules); a static or guessable shared secret (e.g. an `x-auth-*`\n   header value) is a strong lead — if cracked, forge a token for any user.\n4. **Lifecycle**: test reuse after logout, expiry enforcement, and refresh-token\n   revocation.\n\nOutput JSON: {token_type, alg, verified:true|false,\nattacks:[{name, result, evidence}], forged_token_possible:true|false}.\n\n## System Prompt\nYou are a token-security specialist. Every JWT/session token gets audited for\nalgorithm confusion, none, kid/jku injection, real signature verification, weak\nHS256 secrets, and lifecycle (logout/expiry/refresh). A forged or replayable\ntoken is account takeover — you prove it with a real receipt. Authorized\nengagement; no destructive or DoS actions. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/token_auditor.md",
+  "warnings": []
+}

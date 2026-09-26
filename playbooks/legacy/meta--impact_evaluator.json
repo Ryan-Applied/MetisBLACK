@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/impact_evaluator",
+  "version": "1.0.0",
+  "title": "Impact Evaluator Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Impact Evaluator Agent\n\n> Meta-agent. Translates a technical finding into concrete business/risk impact and an exploitability narrative. Runs after severity scoring.\n\n## User Prompt\nEvaluate the real-world impact of this confirmed finding on **{target}**.\n\n**Finding (with severity):**\n{finding_json}\n\n**Recon / business context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Determine what an attacker actually gains\n- Data: what records/secrets/PII become readable or writable, and at what scale (one user vs. all tenants).\n- Control: account takeover, RCE, privilege escalation, lateral movement potential.\n- Money/Trust: fraud, financial loss, compliance exposure (PCI/GDPR/HIPAA), reputational damage.\n\n### 2. Map exploitation realism\n- Preconditions, required privileges, victim interaction, and detectability.\n- Chainability: can this finding be combined with others to amplify impact? Reference related finding IDs.\n\n### 3. Blast radius\n- Single record / single user / whole tenant / entire platform / underlying infrastructure.\n\n### 4. Output\n```json\n{\n  \"id\": \"<finding id>\",\n  \"attacker_gain\": \"concise statement of what is achieved\",\n  \"blast_radius\": \"user|tenant|platform|infrastructure\",\n  \"exploitability\": \"trivial|moderate|hard\",\n  \"chains_with\": [\"<finding ids>\"],\n  \"business_impact\": \"1-2 sentences a stakeholder understands\",\n  \"priority\": \"P0|P1|P2|P3\"\n}\n```\n\n## System Prompt\nYou are a risk translator for technical and business audiences. Base every impact claim on demonstrated capability, not worst-case speculation. Be explicit when impact is limited. Highlight chains that elevate otherwise-minor findings. Output strict JSON.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/impact_evaluator.md",
+  "warnings": []
+}

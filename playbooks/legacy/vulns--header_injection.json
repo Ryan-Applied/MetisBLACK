@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/header_injection",
+  "version": "1.0.0",
+  "title": "HTTP Header Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-113"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# HTTP Header Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for HTTP Header Injection.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Host Header Attacks\n- Password reset poisoning: `Host: evil.com` → reset link uses evil.com\n- `X-Forwarded-Host: evil.com` → same effect\n- Cache poisoning: `Host: target.com` + `X-Forwarded-Host: evil.com`\n### 2. X-Forwarded-For Abuse\n- IP-based access control bypass: `X-Forwarded-For: 127.0.0.1`\n- Rate limit bypass: `X-Forwarded-For: random-ip`\n### 3. Other Header Injections\n- `X-Original-URL: /admin` or `X-Rewrite-URL: /admin` (path override)\n- `X-HTTP-Method-Override: DELETE` (method override)\n- `X-Custom-IP-Authorization: 127.0.0.1`\n### 4. Report\n```\nFINDING:\n- Title: Header Injection via [header] at [endpoint]\n- Severity: Medium\n- CWE: CWE-113\n- Endpoint: [URL]\n- Header: [injected header]\n- Effect: [what changed]\n- Impact: Password reset poisoning, access control bypass\n- Remediation: Validate Host header, don't trust X-Forwarded-* blindly\n```\n## System Prompt\nYou are an HTTP Header Injection specialist. Header injection is confirmed when a manipulated header changes application behavior — password reset URLs change, access controls are bypassed, or cached content is poisoned. Sending headers without observable effect is not a vulnerability.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/header_injection.md",
+  "warnings": []
+}

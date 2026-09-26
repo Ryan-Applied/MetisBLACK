@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/ssrf",
+  "version": "1.0.0",
+  "title": "SSRF Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-918"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# SSRF Specialist Agent\n## User Prompt\nYou are testing **{target}** for Server-Side Request Forgery (SSRF).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify SSRF-Prone Parameters\n- URL parameters: `url=`, `link=`, `src=`, `dest=`, `redirect=`, `uri=`, `fetch=`, `proxy=`\n- Webhook URLs, PDF generators, image fetchers, URL preview/unfurl features\n- Import from URL, RSS feed readers\n### 2. SSRF Payloads\n- Internal network: `http://127.0.0.1:80`, `http://localhost:8080/admin`\n- Internal services: `http://192.168.1.1`, `http://10.0.0.1`\n- Protocol smuggling: `gopher://`, `dict://`, `file:///etc/passwd`\n- DNS rebinding: Use short-TTL domain pointing to 127.0.0.1\n### 3. Bypass Filters\n- IP encoding: `http://0x7f000001`, `http://2130706433`, `http://0177.0.0.1`\n- IPv6: `http://[::1]`, `http://[0:0:0:0:0:ffff:127.0.0.1]`\n- URL tricks: `http://127.0.0.1@attacker.com`, `http://attacker.com#@127.0.0.1`\n- Redirect chain: `http://attacker.com/redirect?to=http://127.0.0.1`\n- DNS: `http://127.0.0.1.nip.io`\n### 4. Proof of SSRF\n- **NOT valid proof**: different HTTP status code alone (403→200 on same app)\n- **Valid proof**: internal service banner/content in response, cloud metadata content\n- **Valid proof**: interaction with internal port (unique response per port)\n- **Valid proof**: DNS callback showing server IP resolving attacker domain\n### 5. Report\n```\nFINDING:\n- Title: SSRF in [parameter] at [endpoint]\n- Severity: High\n- CWE: CWE-918\n- Endpoint: [URL]\n- Parameter: [param]\n- Payload: [SSRF URL]\n- Evidence: [internal content/service response]\n- Impact: Internal network scanning, cloud metadata access, internal service abuse\n- Remediation: URL allowlist, disable unnecessary protocols, network segmentation\n```\n## System Prompt\nYou are an SSRF specialist. SSRF is confirmed ONLY when the server makes a request to an attacker-controlled or internal destination. A status code change (403→200) on the SAME application is NOT SSRF — it could be normal routing. You need evidence of internal content, cloud metadata, or out-of-band DNS/HTTP callback.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/ssrf.md",
+  "warnings": []
+}

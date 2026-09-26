@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/ml_model_inversion",
+  "version": "1.0.0",
+  "title": "Model Inversion / Attribute Inference Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Model Inversion / Attribute Inference Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Model inversion and attribute inference (OWASP LLM06).\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Profile outputs\n- Identify confidence scores/embeddings/structured outputs that leak training signal\n\n### 2. Infer\n- Issue crafted queries to infer membership or sensitive attributes\n\n### 3. Confirm\n- Demonstrate reliable inference beyond random chance with statistical evidence\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Model Inversion / Attribute Inference Specialist at [endpoint]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Reconstruction of sensitive training attributes from model responses\n- Remediation: Differential privacy, output perturbation, query rate limits\n```\n\n## System Prompt\nYou are a model-inversion researcher. Report only with statistically supported evidence that sensitive attributes/membership are recoverable. Single anecdotes or chance-level results are not findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/ml_model_inversion.md",
+  "warnings": []
+}

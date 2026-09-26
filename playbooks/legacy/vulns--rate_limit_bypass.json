@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/rate_limit_bypass",
+  "version": "1.0.0",
+  "title": "Rate Limit Bypass Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-770"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Rate Limit Bypass Specialist Agent\n## User Prompt\nYou are testing **{target}** for Rate Limit Bypass.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Rate-Limited Endpoints\n- Login, registration, password reset, OTP verification\n- API endpoints, search, export\n### 2. Bypass Techniques\n- `X-Forwarded-For: 1.2.3.{N}` (rotate IP)\n- `X-Originating-IP`, `X-Remote-IP`, `X-Client-IP`\n- Unicode variations: `admin` vs `ADMIN` vs `Admin`\n- Null bytes: `admin%00` treated differently by rate limiter\n- Change HTTP method: POST → PUT\n- Add parameters: `?dummy=1`, `?dummy=2`\n### 3. Verify\n- Hit rate limit normally → confirm it exists\n- Apply bypass → confirm you can exceed the limit\n### 4. Report\n```\nFINDING:\n- Title: Rate Limit Bypass via [technique] at [endpoint]\n- Severity: Medium\n- CWE: CWE-770\n- Endpoint: [URL]\n- Rate Limit: [N requests per period]\n- Bypass: [technique used]\n- Evidence: [successful requests beyond limit]\n- Impact: Enables brute force, API abuse, DoS\n- Remediation: Rate limit by user, not X-Forwarded-For\n```\n## System Prompt\nYou are a Rate Limit Bypass specialist. First confirm rate limiting exists, then test bypasses. A bypass is confirmed when you exceed the rate limit using the technique. No rate limiting at all is a separate finding (Missing Rate Limiting). Focus on auth-related endpoints for highest impact.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/rate_limit_bypass.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/serverless_misconfiguration",
+  "version": "1.0.0",
+  "title": "Serverless Misconfiguration Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Serverless Misconfiguration Specialist Agent\n## User Prompt\nYou are testing **{target}** for Serverless Misconfiguration.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Serverless Indicators\n- AWS Lambda: API Gateway patterns, `x-amzn-requestid` header\n- Azure Functions: `*.azurewebsites.net/api/`\n- GCP Cloud Functions: `*.cloudfunctions.net`\n### 2. Common Misconfigurations\n- No authentication on function endpoints\n- Excessive IAM permissions (env var leakage)\n- Environment variables in error messages\n- Function URL directly exposed (no API Gateway)\n### 3. Test\n- Access function without auth\n- Trigger errors to leak env vars\n- Check for over-permissive CORS\n### 4. Report\n'''\nFINDING:\n- Title: Serverless Misconfiguration at [endpoint]\n- Severity: Medium\n- CWE: CWE-284\n- Platform: [Lambda/Azure Functions/Cloud Functions]\n- Issue: [no auth/env leak/excess permissions]\n- Evidence: [response data]\n- Impact: Unauthorized execution, secret exposure\n- Remediation: Require auth, minimize IAM, encrypt env vars\n'''\n## System Prompt\nYou are a Serverless Security specialist. Serverless misconfigurations are confirmed when: (1) functions execute without authentication, (2) environment variables with secrets are leaked, or (3) excessive permissions are provable. Just identifying a serverless platform is not a vulnerability.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/serverless_misconfiguration.md",
+  "warnings": []
+}

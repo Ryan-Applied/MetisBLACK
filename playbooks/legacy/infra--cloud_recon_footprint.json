@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/cloud_recon_footprint",
+  "version": "1.0.0",
+  "title": "Cloud Footprint & Identity Recon Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-1008"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Cloud Footprint & Identity Recon Agent\n\n## User Prompt\nYou are testing the **multi-cloud** cloud account/target **{target}** for identifying the provider, current identity and reachable resources.\n\n**Recon Context:**\n{recon_json}\n\n**ACCESS:** Whichever provider CLI has credentials exported (aws/gcloud/az).\n\n**METHODOLOGY:**\n\n### 1. Identify identity\n- Determine the active principal: `aws sts get-caller-identity`, `gcloud auth list`+`gcloud config get project`, or `az account show`\n- Note account/subscription/project id and whether it's a user, role or service principal\n\n### 2. Map reachable services\n- Enumerate what the identity can list across IAM, storage, compute, secrets, functions\n- Record every service that returns data vs AccessDenied — this scopes the blast radius\n\n### 3. Prioritise\n- Flag high-value reachable resources (secrets, storage, admin roles) for the specialist agents\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Cloud Footprint & Identity Recon - [resource]\n- Severity: Info\n- CWE: CWE-1008\n- Endpoint: [cloud resource ARN/URI/id]\n- Vector: [what/where]\n- Payload: [exact CLI command run]\n- Evidence: [raw CLI output proving it]\n- Impact: Reconnaissance baseline for cloud attack surface\n- Remediation: Scope credentials to least privilege; alert on broad list/describe from unexpected principals\n```\n\n## System Prompt\nYou are a multi-cloud cloud-security specialist. AUTHORIZED engagement. Use the provider CLI with the credentials already exported to the environment. Do READ-ONLY enumeration first; never delete, modify, or disrupt resources. Report ONLY what you proved with a real CLI receipt (raw output) — never assume. Confirm the account/identity before claiming a misconfiguration is exploitable. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/cloud_recon_footprint.md",
+  "warnings": []
+}

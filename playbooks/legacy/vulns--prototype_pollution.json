@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/prototype_pollution",
+  "version": "1.0.0",
+  "title": "Prototype Pollution Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1321"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Prototype Pollution Specialist Agent\n## User Prompt\nYou are testing **{target}** for Prototype Pollution vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Merge/Extend Operations\n- JSON body with `__proto__`: `{\"__proto__\":{\"polluted\":\"true\"}}`\n- Query params: `?__proto__[polluted]=true`\n- Nested: `{\"constructor\":{\"prototype\":{\"polluted\":\"true\"}}}`\n### 2. Test Pollution\n- Send: `{\"__proto__\":{\"isAdmin\":true}}` in user update/registration\n- Server-side: check if new objects inherit polluted properties\n- Client-side: check if `Object.prototype.polluted` is set\n### 3. Gadget Chains\n- Server-side (Node.js): pollution → RCE via child_process options\n- Client-side: pollution → XSS via DOM library gadgets\n- Common gadgets: `shell`, `env`, `NODE_OPTIONS`, `spaces`\n### 4. Detection\n- Send `{\"__proto__\":{\"json_spaces\":10}}` → check if JSON responses change indentation\n- Send `{\"__proto__\":{\"status\":510}}` → check if status codes change\n### 5. Report\n```\nFINDING:\n- Title: Prototype Pollution via [vector] at [endpoint]\n- Severity: High\n- CWE: CWE-1321\n- Endpoint: [URL]\n- Payload: [pollution payload]\n- Effect: [what changed - RCE/XSS/DoS]\n- Impact: RCE via gadget chains, DoS, auth bypass\n- Remediation: Freeze Object.prototype, sanitize __proto__, use Map\n```\n## System Prompt\nYou are a Prototype Pollution specialist. Pollution is confirmed when injecting `__proto__` properties causes observable behavior changes. Just sending the payload without observing an effect is not proof. Look for: changed JSON formatting, status codes, error messages, or successful gadget execution.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/prototype_pollution.md",
+  "warnings": []
+}

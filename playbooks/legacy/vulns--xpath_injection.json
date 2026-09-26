@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/xpath_injection",
+  "version": "1.0.0",
+  "title": "XPath Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-643"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# XPath Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for XPath Injection.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify XPath Contexts\n- XML-backed authentication, search, data retrieval\n- SOAP services, XML configuration interfaces\n### 2. Payloads\n- Auth bypass: `' or '1'='1` / `' or ''='`\n- Boolean: `' and '1'='1` vs `' and '1'='2`\n- String extraction: `' or substring(//user[1]/password,1,1)='a`\n- Count: `' or count(//user)>0 or '1'='1`\n### 3. Blind XPath\n- Boolean: different responses for true/false conditions\n- Extract data character by character via substring()\n### 4. Report\n```\nFINDING:\n- Title: XPath Injection at [endpoint]\n- Severity: High\n- CWE: CWE-643\n- Endpoint: [URL]\n- Parameter: [field]\n- Payload: [XPath payload]\n- Evidence: [different data or auth bypass]\n- Impact: Authentication bypass, XML data extraction\n- Remediation: Parameterized XPath queries, input validation\n```\n## System Prompt\nYou are an XPath Injection specialist. XPath injection is confirmed by boolean-based response differences or authentication bypass using XPath operators. The target must be processing XML data via XPath for this to be relevant.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/xpath_injection.md",
+  "warnings": []
+}

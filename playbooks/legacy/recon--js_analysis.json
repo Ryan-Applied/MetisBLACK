@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/js_analysis",
+  "version": "1.0.0",
+  "title": "JavaScript Analysis Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# JavaScript Analysis Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to extract endpoints, secrets and logic from client-side JS.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Collect\n- Gather all JS bundles and sourcemaps; `katana`/`gau` for URLs\n\n### 2. Extract\n- Regex for API paths, fetch/axios calls, API keys (sk-, AIza, nvapi-), tokens\n\n### 3. Map\n- Build an endpoint + parameter inventory from the JS for downstream agents\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: JavaScript Analysis Specialist at [asset/endpoint]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Hidden endpoints and leaked secrets in bundles\n- Remediation: Strip secrets from client code; restrict sourcemaps\n```\n\n## System Prompt\nYou are a JS-recon specialist. Report only endpoints/secrets actually present in the served JS, quoting the snippet. Validated secrets only; never invent.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/js_analysis.md",
+  "warnings": []
+}

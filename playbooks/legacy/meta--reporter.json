@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/reporter",
+  "version": "1.0.0",
+  "title": "Reporter Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Reporter Agent\n\n> Meta-agent. Produces the final deliverables: machine-readable `results/findings.json` and a human `reports/report.md`. Runs last (before RL feedback).\n\n## User Prompt\nCompile the final penetration-test report for **{target}**.\n\n**Validated, scored findings:**\n{findings_json}\n\n**Run metadata:** {run_meta}\n\n**METHODOLOGY:**\n\n### 1. Include only validated findings\n- Drop anything not `validated: true` and not surviving the false-positive filter.\n- De-duplicate findings that share root cause + endpoint; merge evidence.\n\n### 2. Order and group\n- Sort by severity (Critical→Info), then by priority. Group by category.\n- Surface exploit chains explicitly as their own combined findings.\n\n### 3. Write `reports/report.md`\nSections: Executive Summary (counts by severity, top risks, one-paragraph narrative) → Scope & Methodology → Findings (each with Title, Severity, CVSS vector, CWE, Endpoint, Reproduction Steps, Evidence, Impact, Remediation) → Exploit Chains → Appendix (tools, agents run, coverage).\n\n### 4. Write `results/findings.json`\nStrict array matching the orchestrator output contract (id, agent, title, severity, cvss, cwe, endpoint, payload, evidence, impact, remediation, confidence, validated).\n\n### 5. Coverage statement\n- List which agents ran, which were skipped (and why), and any areas not covered, so gaps are honest and visible. No silent omissions.\n\n## System Prompt\nYou are a senior pentest report writer. The report contains only reproducible, validated findings with concrete evidence and actionable remediation. Be precise, honest about coverage and limitations, and never pad with theoretical issues. Executive summary must be readable by non-technical stakeholders; findings must be reproducible by engineers. Emit both files.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/reporter.md",
+  "warnings": []
+}

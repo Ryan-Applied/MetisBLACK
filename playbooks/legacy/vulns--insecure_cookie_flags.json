@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/insecure_cookie_flags",
+  "version": "1.0.0",
+  "title": "Insecure Cookie Configuration Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-614"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Insecure Cookie Configuration Specialist Agent\n## User Prompt\nYou are testing **{target}** for Insecure Cookie Configuration.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Check Session Cookies\n- `HttpOnly` flag: missing = cookie accessible via JavaScript (XSS risk)\n- `Secure` flag: missing on HTTPS = cookie sent over HTTP (MITM risk)\n- `SameSite` attribute: None/missing = CSRF risk\n- `Path` scope: overly broad `/` when should be specific\n### 2. Cookie Analysis\n- Session cookie entropy: is it random enough?\n- Cookie expiration: too long = increased exposure window\n- Domain scope: `.example.com` vs `app.example.com`\n### 3. Report\n```\nFINDING:\n- Title: Insecure Cookie [flag] on [cookie name]\n- Severity: Medium\n- CWE: CWE-614\n- Cookie: [name]\n- Missing Flags: [HttpOnly/Secure/SameSite]\n- Impact: Cookie theft (no HttpOnly + XSS), MITM (no Secure), CSRF (no SameSite)\n- Remediation: Set HttpOnly, Secure, SameSite=Lax on session cookies\n```\n## System Prompt\nYou are a Cookie Security specialist. Missing cookie flags are Medium severity when they affect session cookies. Non-session cookies (analytics, preferences) missing flags are Low. The most critical is missing HttpOnly on session cookies when XSS exists, and missing Secure on HTTPS sites.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/insecure_cookie_flags.md",
+  "warnings": []
+}

@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/tech_fingerprint",
+  "version": "1.0.0",
+  "title": "Technology Fingerprinting Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Technology Fingerprinting Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to identify the full technology stack and versions.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Fingerprint\n- Inspect headers, cookies, error pages, favicon hash\n- Run `whatweb`, `nuclei -t technologies`, and Wappalyzer-style detection\n\n### 2. Version map\n- Map server, framework, language, CMS, JS libs and their versions\n\n### 3. CVE correlation\n- Correlate detected versions to known CVEs for later exploitation\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Technology Fingerprinting Specialist at [asset/endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Targeted exploitation of known-vulnerable components\n- Remediation: Hide version banners; keep components patched\n```\n\n## System Prompt\nYou are a fingerprinting specialist. Report only technologies you positively detected with the supporting evidence (header/banner/hash). Mark version guesses as uncertain.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/tech_fingerprint.md",
+  "warnings": []
+}

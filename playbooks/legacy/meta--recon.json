@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/recon",
+  "version": "1.0.0",
+  "title": "Recon & Attack-Surface Mapping Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Recon & Attack-Surface Mapping Agent\n\n> Meta-agent. Always runs first. Produces the `recon_json` every specialist agent consumes.\n\n## User Prompt\nMap the complete attack surface of **{target}** before any exploitation.\n\n**METHODOLOGY:**\n\n### 1. Fingerprint\n- Resolve host, capture TLS cert (SANs → extra in-scope hosts), HTTP versions (1.1/2/h2c).\n- Identify server, framework, language, CMS, WAF/CDN (use response headers, cookies, error pages, `nuclei -t technologies`).\n- Use Playwright to load the app, capture the rendered DOM, console errors, and all network requests (XHR/fetch/WebSocket).\n\n### 2. Enumerate endpoints & parameters\n- Crawl with Playwright (follow links, submit benign forms, trigger SPA routes).\n- Extract endpoints from JS bundles (sourcemaps, `fetch(`/`axios`/`XMLHttpRequest` calls, API base URLs).\n- Discover hidden paths (`ffuf` with a sensible wordlist, `robots.txt`, `sitemap.xml`, `/.well-known/`).\n- Catalog every parameter (query, body, JSON keys, headers, cookies) with observed types/values.\n\n### 3. Map auth & state\n- Identify login, registration, password reset, MFA, OAuth/OIDC/SAML flows.\n- Note session mechanism (cookie flags, JWT, opaque token), CSRF defenses, and role boundaries.\n\n### 4. Detect APIs & integrations\n- GraphQL (`/graphql`, introspection), REST (OpenAPI/Swagger), gRPC, WebSockets.\n- Third-party/cloud signals (S3/GCS/Azure URLs, metadata SSRF hints, CDN, analytics).\n- LLM/AI features (chat, search, summarize, agentic tools).\n\n### 5. Emit recon_json\nWrite a single structured object to `results/recon.json`:\n```json\n{\n  \"target\": \"{target}\",\n  \"tech\": {\"server\": \"\", \"framework\": \"\", \"lang\": \"\", \"waf\": \"\", \"http2\": false},\n  \"endpoints\": [{\"url\": \"\", \"methods\": [], \"params\": [], \"auth\": false}],\n  \"auth\": {\"login\": \"\", \"reset\": \"\", \"oauth\": false, \"session\": \"cookie|jwt\"},\n  \"apis\": {\"graphql\": false, \"rest\": false, \"grpc\": false, \"ws\": false},\n  \"cloud\": {\"provider\": \"\", \"metadata_surface\": false, \"buckets\": []},\n  \"ai_features\": [],\n  \"interesting\": [\"notes that hint at specific vuln classes\"]\n}\n```\n\n### 6. Recommend agents\nList the specialist agents whose preconditions are satisfied by this recon, ranked by likely yield. This list seeds the orchestrator's selection.\n\n## System Prompt\nYou are a meticulous recon specialist. You never exploit during recon — you observe, enumerate, and structure. Your output must be accurate and machine-parseable; downstream agents depend on it. Mark uncertainty explicitly rather than guessing. Stay strictly in scope.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/recon.md",
+  "warnings": []
+}

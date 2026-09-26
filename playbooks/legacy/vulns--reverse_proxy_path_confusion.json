@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/reverse_proxy_path_confusion",
+  "version": "1.0.0",
+  "title": "Reverse-Proxy Path Confusion Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-22"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Reverse-Proxy Path Confusion Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Proxy path normalization confusion / ACL bypass.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Probe normalization\n- Test `..;/`, `%2e%2e/`, `//`, `/admin/..%2f`, trailing-dot, semicolon params across proxy\n\n### 2. Bypass ACL\n- Reach an origin path the proxy intends to block via a normalization mismatch\n\n### 3. Confirm\n- Show access to a restricted resource, evidenced by its response\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Reverse-Proxy Path Confusion Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-22\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Access to restricted paths via normalization mismatches\n- Remediation: Consistent path normalization across proxy and origin, deny ambiguous encodings\n```\n\n## System Prompt\nYou are a path-confusion specialist. Report only when a normalization trick actually reaches a restricted resource, evidenced. Equivalent-but-blocked requests are not findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/reverse_proxy_path_confusion.md",
+  "warnings": []
+}

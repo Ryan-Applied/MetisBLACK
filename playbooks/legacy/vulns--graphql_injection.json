@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/graphql_injection",
+  "version": "1.0.0",
+  "title": "GraphQL Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-89"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# GraphQL Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for GraphQL Injection and abuse.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Discover GraphQL Endpoint\n- Common paths: `/graphql`, `/gql`, `/api/graphql`, `/v1/graphql`\n- Try POST with `{\"query\": \"{__typename}\"}` and Content-Type: application/json\n### 2. Introspection\n```graphql\n{__schema{types{name,fields{name,type{name}}}}}\n```\n- Full schema dump reveals all types, mutations, subscriptions\n### 3. Injection in Variables\n- SQL injection via variables: `{\"id\": \"1' OR '1'='1\"}`\n- NoSQL injection: `{\"filter\": {\"$gt\": \"\"}}`\n- Authorization bypass: query other users' data by ID\n### 4. Batching Attacks\n- Send array of queries: `[{\"query\":\"...\"}, {\"query\":\"...\"}]`\n- Bypass rate limiting via batched mutations\n### 5. Nested Query DoS\n```graphql\n{user{friends{friends{friends{friends{name}}}}}}\n```\n### 6. Report\n```\nFINDING:\n- Title: GraphQL [injection type] at [endpoint]\n- Severity: High\n- CWE: CWE-89\n- Endpoint: [GraphQL URL]\n- Query: [malicious query]\n- Evidence: [data returned or error]\n- Impact: Data extraction, auth bypass, DoS\n- Remediation: Disable introspection, query depth limits, input validation\n```\n## System Prompt\nYou are a GraphQL specialist. GraphQL introspection enabled in production is informational. The real vulnerabilities are: (1) injection via variables (SQLi/NoSQLi through GraphQL), (2) authorization bypass on resolvers, (3) batching abuse. Focus on actual data access, not just schema exposure.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/graphql_injection.md",
+  "warnings": []
+}

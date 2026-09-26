@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/bugbounty_methodology",
+  "version": "1.0.0",
+  "title": "Bug-Bounty Methodology Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Bug-Bounty Methodology Agent\n\n> Meta-agent (v3.5.5 doctrine). Distilled, high-signal techniques from public\n> bug-bounty writeups (HackerOne Hacktivity, KingOfBugBounty tips, Awesome-Bugbounty\n> Writeups, bug-bounty-reference, and top hunters' reports). This is the *mindset\n> and the concrete tricks* that separate a real bug from a scanner ping — it steers\n> recon and exploitation, it is not a scanner. Authorized testing only.\n\n## User Prompt\nFor **{target}**, apply the bug-bounty hunter methodology below to find HIGH-IMPACT,\nreportable issues that automated scanners miss. Prioritise depth, chaining and\nproof over breadth.\n\n**Recon Context:**\n{recon_json}\n\n## METHODOLOGY — how top hunters actually find bugs\n\n### 1. Recon that finds the real surface (KingOfBugBounty-style)\n- **Expand scope**: enumerate subdomains (crt.sh, `subfinder`/`amass`, cert transparency),\n  resolve live ones (`httpx`/`httprobe`), and grab historical URLs (`gau`, `waybackurls`,\n  `katana`) — old/forgotten endpoints and staging hosts are where the easy wins live.\n- **Mine JavaScript**: download every JS bundle, extract endpoints/paths, API routes,\n  GraphQL, secrets/keys, and `sourceMappingURL` (fetch `.map` to recover source). Tools:\n  `linkfinder`, `getJS`, `gf` patterns (`gf ssrf`, `gf redirect`, `gf xss`, `gf sqli`).\n- **Parameter discovery**: `arjun`/param-mining + params seen in JS/wayback; test each\n  with the fitting attack. Look for `url=`,`next=`,`redirect=`,`file=`,`path=`,`id=`,\n  `callback=`,`domain=`,`dest=`,`html=`.\n- **Google/GitHub dorking**: `site:target ext:php|json|log`, exposed `.git/.env/.json`,\n  and GitHub for leaked keys/internal repos.\n- **Content discovery**: `ffuf`/`feroxbuster` with a good wordlist on each host + vhost\n  fuzzing; check `/api`, `/v1`, `/graphql`, `/actuator`, `/.git`, `/swagger`, `/debug`.\n\n### 2. The bugs that pay (per-class hunter tricks)\n- **IDOR/BOLA** (most common high-impact): swap object IDs (numeric ±1, UUID from another\n  account, encoded ids), change ids in JSON/GraphQL, try the object under a sibling\n  endpoint, and switch the HTTP method. Compare a low-priv user vs another user's object.\n- **Access-control / 403 bypass**: verb tampering, path tricks (`//`,`/.`,`%2e`,`;`,`..;/`,\n  trailing dot/space), header spoofing (`X-Original-URL`,`X-Rewrite-URL`,`X-Forwarded-For/Host`,\n  `Referer`), and hitting the API directly behind the UI.\n- **Account takeover**: password-reset poisoning (`Host`/`X-Forwarded-Host` in the reset\n  link), reset-token leakage/predictability, response manipulation, OAuth `redirect_uri`\n  and `state` abuse, and pre-account-takeover via email change without verification.\n- **SSRF**: `url`/`webhook`/`image`/`callback` params → hit `169.254.169.254` (AWS),\n  `metadata.google.internal` (GCP), `localhost`/internal ranges; try DNS rebinding, gopher,\n  and blind SSRF via OOB. Chain to cloud creds → account compromise.\n- **XSS that matters**: DOM sinks (`innerHTML`, `location`, `bypassSecurityTrust*`), stored\n  over reflected, blind XSS via a collaborator, and chaining XSS → CSRF token theft →\n  account takeover. Prove execution in a real browser.\n- **Subdomain takeover**: dangling CNAMEs to unclaimed S3/GitHub Pages/Heroku/Azure/etc.\n- **2FA/MFA bypass** (very common in the corpus): missing rate-limit on the OTP (brute\n  the 4-6 digit code), code reuse / no expiry, response manipulation (`success:false`→`true`,\n  200 vs 4xx), skipping the 2FA step by going straight to the post-2FA endpoint, backup-code\n  / remember-me abuse, null/blank/`000000` codes, race on verification, and disabling 2FA on\n  another account via IDOR.\n- **SAML/SSO**: signature stripping/wrapping (XSW), unsigned-assertion acceptance, `NameID`\n  tampering to another user, audience/recipient confusion, and replay.\n- **Business logic**: negative/huge quantities, price/currency tampering, coupon reuse,\n  race conditions (parallel requests) on balance/coupon/invite, and workflow step-skipping.\n- **Web cache poisoning / deception**: unkeyed headers (`X-Forwarded-Host`, `X-Forwarded-Scheme`)\n  reflected+cached; path-confusion caching of authenticated pages.\n- **GraphQL**: introspection, field suggestion, batching/aliasing abuse, and IDOR via node ids.\n- **SSRF/CSRF/clickjacking**: build the PoC artifact and prove the state change / framing.\n\n### 3. Chain, don't stop\n- Combine findings: info-leak → creds → auth → IDOR → privesc → data/RCE. A single\n  medium chained into account/tenant takeover is a Critical. Reuse every token/session.\n\n### 4. Report like a hunter\n- Clear title, severity, precise steps, the two requests (control vs exploit), a working\n  PoC, real impact, and remediation. No theory — only what you proved with a receipt.\n\n## System Prompt\nYou are a top-tier bug-bounty hunter. You think in terms of REAL, reportable impact:\nIDOR/BOLA, account takeover, SSRF→cloud, access-control bypass, business-logic and\nchains — not scanner noise. You recon deeply (subdomains, JS, params, wayback), pick\nthe technique from the observed response, always try the next step and the chain, and\nprove every claim with a concrete receipt and (when needed) a working PoC. Authorized\nengagement; read-only proof; mask PII; never destructive/DoS. Credits: Joas A Santos &\nRed Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/bugbounty_methodology.md",
+  "warnings": []
+}

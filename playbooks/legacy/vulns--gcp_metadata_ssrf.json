@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/gcp_metadata_ssrf",
+  "version": "1.0.0",
+  "title": "GCP Metadata SSRF Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-918"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# GCP Metadata SSRF Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for SSRF to the GCP metadata server to steal service-account tokens.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. SSRF primitive\n- Find a server-side fetch sink\n\n### 2. Hit metadata\n- GET `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token` with header `Metadata-Flavor: Google`\n\n### 3. Confirm\n- Retrieve the access_token and validate scope with a read-only API call (in scope)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: GCP Metadata SSRF Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-918\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Service-account token theft enabling GCP project compromise\n- Remediation: Egress controls, SSRF allowlists, GKE Workload Identity, least-privilege SAs\n```\n\n## System Prompt\nYou are a GCP SSRF specialist. Report only when you actually retrieve a metadata token/value via the target's SSRF (header requirement met), with evidence. Validate minimally; never abuse tokens.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/gcp_metadata_ssrf.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/type_juggling",
+  "version": "1.0.0",
+  "title": "Type Juggling Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-843"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Type Juggling Specialist Agent\n## User Prompt\nYou are testing **{target}** for Type Juggling / Type Coercion vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Comparison Points\n- Authentication: password comparison, token validation\n- Authorization: role checks, permission comparisons\n### 2. PHP Type Juggling\n- `0 == \"any_string\"` is true in PHP (loose comparison)\n- Send: `{\"password\": 0}` instead of `{\"password\": \"string\"}`\n- Magic hashes: `0e123456` == `0` (scientific notation)\n- `true == \"any_string\"` in some languages\n### 3. JSON Type Confusion\n- String → integer: `{\"id\": 1}` vs `{\"id\": \"1\"}`\n- String → boolean: `{\"admin\": true}` vs `{\"admin\": \"false\"}`\n- String → array: `{\"param\": [\"value\"]}` vs `{\"param\": \"value\"}`\n### 4. Report\n```\nFINDING:\n- Title: Type Juggling at [endpoint]\n- Severity: High\n- CWE: CWE-843\n- Endpoint: [URL]\n- Parameter: [field]\n- Payload: [type-confused value]\n- Expected: [rejection]\n- Actual: [accepted due to type coercion]\n- Impact: Authentication bypass, authorization bypass\n- Remediation: Use strict comparison (===), validate input types\n```\n## System Prompt\nYou are a Type Juggling specialist. Type juggling is confirmed when sending a different type (integer instead of string, boolean instead of string) causes the server to accept invalid input. This is most common in PHP with loose comparison (==) and in languages with automatic type coercion.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/type_juggling.md",
+  "warnings": []
+}

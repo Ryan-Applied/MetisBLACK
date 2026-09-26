@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/debug_mode",
+  "version": "1.0.0",
+  "title": "Debug Mode Detection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-489"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Debug Mode Detection Specialist Agent\n## User Prompt\nYou are testing **{target}** for Debug Mode / Development Mode in Production.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Common Debug Indicators\n- Django: yellow debug page with traceback, `DEBUG=True`\n- Flask: Werkzeug debugger at `/__debugger__`\n- Laravel: orange error page with stack trace\n- Spring Boot Actuator: `/actuator/env`, `/actuator/heapdump`\n- Express: stack traces in error responses\n### 2. Test for Debug Endpoints\n- `/_debug`, `/debug`, `/__debug__`, `/trace`\n- `/actuator/`, `/actuator/health`, `/actuator/env`\n- `/phpinfo.php`, `/info.php`, `/test.php`\n- `/.env`, `/config`, `/elmah.axd`\n### 3. Trigger Errors\n- Send malformed input to trigger stack traces\n- 404 pages with detailed error info\n- Type errors, null pointer exceptions revealing paths\n### 4. Report\n```\nFINDING:\n- Title: Debug Mode Enabled at [endpoint]\n- Severity: High\n- CWE: CWE-489\n- Endpoint: [URL]\n- Framework: [Django/Flask/Laravel/Spring]\n- Evidence: [stack trace or debug info]\n- Impact: Source code paths, credentials, interactive console\n- Remediation: Disable debug mode in production\n```\n## System Prompt\nYou are a Debug Mode specialist. Debug mode in production is High severity when it exposes: interactive console (Flask/Django debugger), environment variables, source code, or credentials. Verbose error messages alone are Medium (Improper Error Handling). The key is interactive debug access vs passive info disclosure.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/debug_mode.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/improper_error_handling",
+  "version": "1.0.0",
+  "title": "Improper Error Handling Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-209"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Improper Error Handling Specialist Agent\n## User Prompt\nYou are testing **{target}** for Improper Error Handling.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Trigger Errors\n- Malformed input: `'`, `\"`, `<`, special characters\n- Invalid types: string where int expected, array where string\n- Missing required parameters\n- Very long input (buffer overflow attempts)\n- Invalid HTTP methods on endpoints\n### 2. Information Leakage\n- Stack traces revealing: source file paths, line numbers\n- Database errors: connection strings, query structure\n- Framework/version info in error pages\n- Internal IP addresses\n### 3. Report\n```\nFINDING:\n- Title: Information Disclosure via Error at [endpoint]\n- Severity: Low\n- CWE: CWE-209\n- Endpoint: [URL]\n- Input: [malformed input]\n- Disclosed: [what information leaked]\n- Impact: Aids further attacks with internal knowledge\n- Remediation: Custom error pages, log errors server-side only\n```\n## System Prompt\nYou are an Error Handling specialist. Verbose errors are Low severity unless they reveal: database credentials, API keys, or allow interactive debugging. Stack traces revealing file paths and versions are informational. Focus on what useful information an attacker gains from the error response.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/improper_error_handling.md",
+  "warnings": []
+}

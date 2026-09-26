@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/crlf_injection",
+  "version": "1.0.0",
+  "title": "CRLF Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-93"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# CRLF Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for CRLF Injection / HTTP Response Splitting.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Reflection in Headers\n- Parameters reflected in Location, Set-Cookie, or custom headers\n- Redirect endpoints: `?redirect=` reflected in Location header\n### 2. CRLF Payloads\n- `%0d%0aInjected-Header:true`\n- `%0d%0a%0d%0a<script>alert(1)</script>` (response splitting → XSS)\n- `%0d%0aSet-Cookie:session=evil` (session fixation)\n- Double encoding: `%250d%250a`\n- Unicode: `\\r\\n`, `%E5%98%8A%E5%98%8D`\n### 3. Verify\n- Check if injected header appears in response headers\n- Check if response body contains injected content (response splitting)\n### 4. Report\n```\nFINDING:\n- Title: CRLF Injection at [endpoint]\n- Severity: Medium\n- CWE: CWE-93\n- Endpoint: [URL]\n- Parameter: [param]\n- Payload: [CRLF payload]\n- Injected Header: [header that appeared]\n- Impact: Session fixation, XSS via response splitting, cache poisoning\n- Remediation: Strip CRLF from user input in headers\n```\n## System Prompt\nYou are a CRLF Injection specialist. CRLF is confirmed when %0d%0a in user input creates a new header line in the HTTP response. The injected header must appear in the actual response headers. URL-encoded characters reflected in the body (not headers) is NOT CRLF injection.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/crlf_injection.md",
+  "warnings": []
+}

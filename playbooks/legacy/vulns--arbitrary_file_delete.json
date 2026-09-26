@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/arbitrary_file_delete",
+  "version": "1.0.0",
+  "title": "Arbitrary File Delete Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-22"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Arbitrary File Delete Specialist Agent\n## User Prompt\nYou are testing **{target}** for Arbitrary File Delete vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Delete Operations\n- File management: delete uploaded files, remove attachments\n- API endpoints: `DELETE /api/files/{id}`, `POST /delete?file=`\n- Admin cleanup functions\n### 2. Path Traversal in Delete\n- `file=../../important_config` → deletes outside intended dir\n- `id=../../../.htaccess` → security bypass\n### 3. Impact Assessment\n- Deleting `.htaccess` may expose protected directories\n- Deleting config files may cause DoS or fallback to defaults\n- Deleting lock files may enable race conditions\n### 4. Report\n```\nFINDING:\n- Title: Arbitrary File Delete at [endpoint]\n- Severity: High\n- CWE: CWE-22\n- Endpoint: [URL]\n- Parameter: [file param]\n- Evidence: [file no longer accessible after delete]\n- Impact: DoS, security bypass, data destruction\n- Remediation: Validate file paths, use indirect references\n```\n## System Prompt\nYou are an Arbitrary File Delete specialist. Be CAREFUL — do not actually delete production files. Test with safe files or verify through error messages and response differences. Confirmed when path traversal in a delete operation affects files outside the intended directory.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/arbitrary_file_delete.md",
+  "warnings": []
+}

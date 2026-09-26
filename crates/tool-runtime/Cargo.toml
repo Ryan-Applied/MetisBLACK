@@ -1,0 +1,25 @@
+[package]
+name = "metisblack-tool-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+domain = { package = "metisblack-domain", path = "../domain" }
+policy = { package = "metisblack-policy", path = "../policy" }
+evidence = { package = "metisblack-evidence", path = "../evidence" }
+storage = { package = "metisblack-storage", path = "../storage" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+url.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

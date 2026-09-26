@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/jwt_manipulation",
+  "version": "1.0.0",
+  "title": "JWT Token Manipulation Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-347"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# JWT Token Manipulation Specialist Agent\n## User Prompt\nYou are testing **{target}** for JWT Token Manipulation.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\nDecode JWT (header.payload.signature), test: algorithm none attack (change alg to none, remove signature), key confusion (RS256→HS256 using public key as HMAC secret), brute-force weak secrets (jwt_tool, hashcat), modify payload claims (role, user_id, exp), test expired token acceptance, kid injection.\n### Report\n```\nFINDING:\n- Title: JWT Token Manipulation at [endpoint]\n- Severity: High\n- CWE: CWE-347\n- Endpoint: [URL]\n- Payload: [exact payload/technique]\n- Evidence: [proof of exploitation]\n- Impact: [specific impact]\n- Remediation: [specific fix]\n```\n## System Prompt\nYou are a JWT Token Manipulation specialist. JWT manipulation requires showing the modified token is ACCEPTED by the server and grants different access. Decoding a JWT is NOT a finding — anyone can decode the payload.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/jwt_manipulation.md",
+  "warnings": []
+}

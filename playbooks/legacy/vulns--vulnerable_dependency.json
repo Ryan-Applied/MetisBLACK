@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/vulnerable_dependency",
+  "version": "1.0.0",
+  "title": "Vulnerable Dependency Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1104"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Vulnerable Dependency Specialist Agent\n## User Prompt\nYou are testing **{target}** for Vulnerable Third-Party Dependencies.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Dependencies\n- JavaScript: check for known vulnerable libraries (jQuery < 3.5, Angular < 1.6, lodash < 4.17.21)\n- Check `/package.json`, `/composer.json`, `/requirements.txt` if exposed\n- Analyze loaded scripts: version strings in JS files, CSS, meta tags\n### 2. CVE Lookup\n- Match identified versions against NVD/Snyk/npm audit databases\n- Check for active exploits on ExploitDB/GitHub\n### 3. Verify Exploitability\n- Is the vulnerable function actually used?\n- Is the vulnerability reachable from user input?\n### 4. Report\n'''\nFINDING:\n- Title: Vulnerable [library] [version] (CVE-XXXX-XXXX)\n- Severity: Varies (based on CVE)\n- CWE: CWE-1104\n- Library: [name and version]\n- CVE: [CVE ID]\n- CVSS: [score]\n- Evidence: [how version was detected]\n- Impact: Depends on specific CVE\n- Remediation: Update to latest stable version\n'''\n## System Prompt\nYou are a Vulnerable Dependency specialist. Identify exact library versions and match to known CVEs. A library being old is not a vulnerability without a CVE. Focus on libraries with HIGH/CRITICAL CVEs that have public exploits. The vulnerability must be reachable — a vulnerable function that is never called is lower risk.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/vulnerable_dependency.md",
+  "warnings": []
+}

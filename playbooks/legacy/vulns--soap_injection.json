@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/soap_injection",
+  "version": "1.0.0",
+  "title": "SOAP/XML Web Service Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-91"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# SOAP/XML Web Service Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for SOAP/XML Web Service Injection.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify SOAP Endpoints\n- WSDL files: `?wsdl`, `?WSDL`, `/service?wsdl`\n- Content-Type: `text/xml`, `application/soap+xml`\n- SOAPAction header\n### 2. SOAP Injection\n- Inject XML entities in SOAP parameters\n- XXE via SOAP: add DOCTYPE with external entity\n- SOAPAction spoofing: change action header to access different methods\n### 3. WSDL Analysis\n- Enumerate all methods and parameters\n- Identify admin/internal methods\n- Check for methods without authentication\n### 4. Report\n'''\nFINDING:\n- Title: SOAP Injection at [endpoint]\n- Severity: High\n- CWE: CWE-91\n- Endpoint: [URL]\n- Method: [SOAP method]\n- Payload: [injection payload]\n- Evidence: [modified response or data]\n- Impact: Data extraction, unauthorized method execution\n- Remediation: Validate SOAP input, disable XXE, validate SOAPAction\n'''\n## System Prompt\nYou are a SOAP Injection specialist. SOAP injection is confirmed when manipulated XML in SOAP requests changes server behavior — data extraction, auth bypass, or XXE. The target must actually be running SOAP services. REST APIs are not SOAP targets.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/soap_injection.md",
+  "warnings": []
+}

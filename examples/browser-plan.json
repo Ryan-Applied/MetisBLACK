@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "name": "authenticated-observation",
+  "actor": "browser-plan",
+  "session": {
+    "browser": "chrome",
+    "headless": true,
+    "accept_insecure_certificates": false,
+    "additional_capabilities": {}
+  },
+  "steps": [
+    {
+      "id": "open",
+      "action": {
+        "action": "navigate",
+        "url": "https://app.example.test/login"
+      }
+    },
+    {
+      "id": "email",
+      "action": {
+        "action": "fill",
+        "locator": {"strategy": "css", "value": "input[name=email]"},
+        "value": {"source": "environment", "name": "METIS_TEST_EMAIL"}
+      }
+    },
+    {
+      "id": "password",
+      "action": {
+        "action": "fill",
+        "locator": {"strategy": "css", "value": "input[name=password]"},
+        "value": {"source": "environment", "name": "METIS_TEST_PASSWORD"}
+      }
+    },
+    {
+      "id": "button",
+      "action": {
+        "action": "find",
+        "locator": {"strategy": "css", "value": "button[type=submit]"},
+        "alias": "submit"
+      }
+    },
+    {"id": "submit", "action": {"action": "click", "alias": "submit"}},
+    {"id": "evidence", "action": {"action": "screenshot"}},
+    {"id": "network", "action": {"action": "network_logs"}}
+  ]
+}

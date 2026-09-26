@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/websocket_csrf",
+  "version": "1.0.0",
+  "title": "Cross-Site WebSocket Hijacking Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-352"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Cross-Site WebSocket Hijacking Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Cross-Site WebSocket Hijacking (CSWSH).\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Inspect handshake\n- Check if WS auth relies only on cookies and whether Origin is validated\n\n### 2. Build PoC\n- From an attacker origin, open a WS to the target and send/read authenticated messages\n\n### 3. Confirm\n- Show cross-origin authenticated WS actions succeed\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Cross-Site WebSocket Hijacking Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-352\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Attacker site opens an authenticated WS connection and acts as the victim\n- Remediation: Validate Origin on handshake, use anti-CSRF tokens, avoid cookie-only auth for WS\n```\n\n## System Prompt\nYou are a CSWSH specialist. Report only when a cross-origin page can establish an authenticated WS session and perform actions/read data, evidenced by the PoC. Proper Origin/token checks mean no finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/websocket_csrf.md",
+  "warnings": []
+}

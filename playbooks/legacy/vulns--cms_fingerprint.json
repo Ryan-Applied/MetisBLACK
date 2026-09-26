@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/cms_fingerprint",
+  "version": "1.0.0",
+  "title": "CMS Fingerprint & Version Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# CMS Fingerprint & Version Agent\n\n## User Prompt\nYou are testing **{target}** for CMS identification and version disclosure.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Identify\n- Detect CMS via meta generator, paths (`/wp-`, `/sites/`, `/administrator/`), headers, favicon hash\n- Run whatweb/wpscan-style detection without auth\n\n### 2. Version\n- Pin exact version from readme/changelog/asset hashes\n\n### 3. Map\n- List plugins/themes/modules and their versions for CVE correlation\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: CMS Fingerprint & Version at [endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [full URL]\n- Vector: [what/where]\n- Payload: [exact payload/command]\n- Evidence: [raw tool output proving it]\n- Impact: Targeted exploitation surface\n- Remediation: Hide version/generator; keep components updated\n```\n\n## System Prompt\nYou are a specialist in CMS identification and version disclosure. AUTHORIZED engagement. Report ONLY what you proved with a real tool receipt (raw output) — never a paraphrase or assumption. Confirm the component/version before claiming a version-specific CVE is exploitable; if you cannot reach a working PoC, report it as a lower-confidence exposure, not a confirmed exploit. No destructive/DoS actions. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/cms_fingerprint.md",
+  "warnings": []
+}

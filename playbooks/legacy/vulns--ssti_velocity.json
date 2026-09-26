@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/ssti_velocity",
+  "version": "1.0.0",
+  "title": "Velocity SSTI Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1336"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Velocity SSTI Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Server-Side Template Injection in Apache Velocity.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Detect\n- Probe `#set($x=7*7)$x` -> 49\n\n### 2. Escalate\n- Use `$class.inspect(...).type.forName('java.lang.Runtime')` gadget chains to exec\n\n### 3. Confirm\n- Capture command output\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Velocity SSTI Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-1336\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Code execution via Velocity tooling\n- Remediation: Avoid user-controlled templates, restrict tool context\n```\n\n## System Prompt\nYou are a Velocity SSTI specialist. Report only with confirmed evaluation and execution evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/ssti_velocity.md",
+  "warnings": []
+}

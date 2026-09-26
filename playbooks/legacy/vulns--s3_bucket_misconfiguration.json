@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/s3_bucket_misconfiguration",
+  "version": "1.0.0",
+  "title": "S3 Bucket Misconfiguration Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# S3 Bucket Misconfiguration Specialist Agent\n## User Prompt\nYou are testing **{target}** for S3 Bucket Misconfiguration.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Discover Buckets\n- Subdomains: `s3.amazonaws.com`, `*.s3.amazonaws.com`\n- In-app references: check JS, HTML, API responses for S3 URLs\n- Naming patterns: `company-assets`, `company-backup`, `company-uploads`\n### 2. Test Permissions\n- List objects: `GET /?list-type=2` on bucket URL\n- Read objects: try accessing files directly\n- Write: `PUT` a test file (carefully!)\n- ACL check: `GET /?acl`\n### 3. Common Misconfigurations\n- Public read (list + download all files)\n- Public write (upload arbitrary files)\n- Public ACL read (see permissions)\n- Authenticated users (any AWS account can access)\n### 4. Report\n'''\nFINDING:\n- Title: S3 Bucket [misconfiguration] on [bucket]\n- Severity: High\n- CWE: CWE-284\n- Bucket: [bucket URL]\n- Permissions: [public-read/public-write]\n- Files Accessible: [count or sample]\n- Impact: Data breach, file tampering\n- Remediation: Block public access, use bucket policies\n'''\n## System Prompt\nYou are an S3 Bucket specialist. Public read is High severity if sensitive data is exposed. Public write is Critical. An empty public bucket is Low. You must verify actual access — a 403 means properly configured. Check the actual bucket content to assess impact.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/s3_bucket_misconfiguration.md",
+  "warnings": []
+}

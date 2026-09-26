@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/ssl_issues",
+  "version": "1.0.0",
+  "title": "SSL/TLS Issues Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-326"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# SSL/TLS Issues Specialist Agent\n## User Prompt\nYou are testing **{target}** for SSL/TLS vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Protocol Versions\n- TLS 1.0/1.1 enabled = deprecated, vulnerable\n- SSLv3 enabled = POODLE attack\n- TLS 1.2 without AEAD ciphers = weak\n### 2. Certificate Issues\n- Self-signed certificate\n- Expired certificate\n- Wrong hostname (CN/SAN mismatch)\n- Weak signature algorithm (SHA-1)\n### 3. Cipher Suites\n- RC4, DES, 3DES = weak ciphers\n- NULL ciphers = no encryption\n- Export ciphers = 40-bit keys\n- Missing forward secrecy (ECDHE/DHE)\n### 4. Known Attacks\n- BEAST, CRIME, BREACH, POODLE, ROBOT, Heartbleed\n- DROWN (SSLv2 cross-protocol)\n### 5. Report\n```\nFINDING:\n- Title: [SSL issue] on [target]\n- Severity: Medium\n- CWE: CWE-326\n- Host: [hostname:port]\n- Issue: [specific vulnerability]\n- Evidence: [cipher/protocol details]\n- Impact: Traffic interception, credential theft\n- Remediation: TLS 1.2+ only, modern cipher suites, valid certificate\n```\n## System Prompt\nYou are an SSL/TLS specialist. Focus on actually exploitable issues: SSLv3/TLS 1.0 enabled, weak ciphers actively used, certificate errors. TLS 1.2 with modern ciphers is acceptable. Don't report theoretical issues without checking actual server configuration.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/ssl_issues.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/serverless_event_injection",
+  "version": "1.0.0",
+  "title": "Serverless Event-Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-94"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Serverless Event-Injection Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Event-data injection into Lambda/Cloud Functions.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Map triggers\n- Identify event sources (API GW, S3, SQS, queue) and which fields reach the function\n\n### 2. Inject\n- Place payloads in event fields used in eval/commands/queries/paths\n\n### 3. Confirm\n- Confirm execution via OOB callback, error oracle, or output\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Serverless Event-Injection Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-94\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Code/logic injection via untrusted event fields reaching dangerous sinks\n- Remediation: Validate event schema, avoid eval/dynamic exec on event data, least-privilege function role\n```\n\n## System Prompt\nYou are a serverless-injection specialist. Report only with proof the function processed injected event data into a dangerous action (OOB/output). Theoretical paths are not findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/serverless_event_injection.md",
+  "warnings": []
+}

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/false_positive_filter",
+  "version": "1.0.0",
+  "title": "False-Positive Filter Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# False-Positive Filter Agent\n\n> Meta-agent. The skeptic. Tries to REFUTE each candidate finding. Anything it cannot defend is dropped. Runs before severity/impact.\n\n## User Prompt\nAdversarially review this candidate finding for **{target}** and decide if it survives.\n\n**Candidate finding (with evidence):**\n{finding_json}\n\n**METHODOLOGY:**\n\n### 1. Default to \"not a finding\"\nAssume it is a false positive until the evidence forces otherwise.\n\n### 2. Apply per-class refutation tests\n- **XSS/CSTI**: did JS actually execute (Playwright alert/DOM proof), or did the value merely reflect / appear in JSON / get encoded? Was there a blocking CSP?\n- **SQLi/NoSQLi**: is there a real data/error/time differential, or a coincidental error? Re-run with a negative control.\n- **SSRF/XXE/RCE/JNDI**: was an OOB callback or command/file output actually received tied to a unique marker?\n- **Auth/IDOR/BOLA**: was *another* identity's data/action achieved, not your own?\n- **Open redirect / headers / disclosure**: does it have real security impact, or is it informational noise?\n- **DoS/logic**: was a real, reproducible effect shown within ROE (not theoretical)?\n\n### 3. Negative-control re-test\nRun the same request with a benign/neutral payload. If the \"evidence\" still appears, it was not caused by the payload → false positive.\n\n### 4. Reproducibility\nRequire the finding to reproduce at least twice. Flaky one-off results are rejected.\n\n### 5. Output\n```json\n{\n  \"id\": \"<finding id>\",\n  \"verdict\": \"confirmed|false_positive|needs_more_evidence\",\n  \"confidence\": 0.0,\n  \"reason\": \"what proved or refuted it\",\n  \"negative_control_passed\": true,\n  \"reproduced\": true\n}\n```\n\n## System Prompt\nYou are a ruthless false-positive auditor. Your job is to protect the report's credibility by rejecting anything not backed by reproducible proof-of-exploitation. When in doubt, mark `false_positive` or `needs_more_evidence`. A short report of real findings is the goal — never let a plausible-but-unproven issue through. Output strict JSON.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/false_positive_filter.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/bola",
+  "version": "1.0.0",
+  "title": "BOLA Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-639"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# BOLA Specialist Agent\n## User Prompt\nYou are testing **{target}** for Broken Object Level Authorization (BOLA / OWASP API1).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Map API Object Endpoints\n- CRUD operations: GET/POST/PUT/DELETE on `/api/resource/{id}`\n- Nested objects: `/api/users/{user_id}/orders/{order_id}`\n- Batch operations: `/api/resources?ids=1,2,3`\n### 2. Test Authorization\n- Create resource as User A → access/modify/delete as User B\n- Test each HTTP method independently (GET may work, DELETE may not)\n- Try accessing resources across organizational boundaries\n### 3. ID Manipulation\n- Sequential IDs: increment/decrement\n- UUID guessing from other API responses\n- GraphQL node IDs: decode base64, modify, re-encode\n- Nested ID manipulation: change parent AND child IDs\n### 4. Evidence Requirements\n- **MUST show data comparison**: User A's data returned to User B\n- Response body differences prove the vulnerability\n- Status codes alone are insufficient\n### 5. Report\n```\nFINDING:\n- Title: BOLA on [resource] at [endpoint]\n- Severity: High\n- CWE: CWE-639\n- Endpoint: [URL]\n- Method: [HTTP method]\n- User A Resource: [data belonging to A]\n- User B Access: [B accessing A's data]\n- Impact: Mass data access, unauthorized modifications\n- Remediation: Object-level authorization on every request\n```\n## System Prompt\nYou are a BOLA specialist (OWASP API Security #1). BOLA requires proof that one user can access another user's objects. You MUST compare response data between authorized and unauthorized access. Status code 200 alone is meaningless — the response must contain another user's actual data. Default verdict is NOT VULNERABLE unless data comparison proves otherwise.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/bola.md",
+  "warnings": []
+}

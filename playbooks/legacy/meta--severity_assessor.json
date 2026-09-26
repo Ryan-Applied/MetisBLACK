@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/severity_assessor",
+  "version": "1.0.0",
+  "title": "Severity Assessor Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Severity Assessor Agent\n\n> Meta-agent. Assigns a defensible CVSS 3.1 vector + severity band to every confirmed finding. Runs after validation.\n\n## User Prompt\nScore the severity of this confirmed finding for **{target}**.\n\n**Finding:**\n{finding_json}\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Build the CVSS 3.1 base vector\nDerive each metric from the evidence, not assumptions:\n- **AV** (Network/Adjacent/Local/Physical) — how the vuln is reached.\n- **AC** (Low/High) — reliability/preconditions to exploit.\n- **PR** (None/Low/High) — privilege required (unauth vs authed vs admin).\n- **UI** (None/Required) — does it need a victim action?\n- **S** (Unchanged/Changed) — does impact cross a security boundary (e.g. SSRF→cloud, container escape)?\n- **C/I/A** (None/Low/High) — actual demonstrated confidentiality/integrity/availability impact.\n\n### 2. Compute & band\n- Produce the vector string and base score.\n- Map to band: 9.0–10.0 Critical, 7.0–8.9 High, 4.0–6.9 Medium, 0.1–3.9 Low, 0.0 Info.\n\n### 3. Context adjustment (temporal/environmental, documented)\n- Downgrade if exploitation required improbable preconditions actually present only in test.\n- Upgrade `S:Changed` for scope-crossing (SSRF to metadata creds, RCE, auth bypass).\n- Note any data sensitivity (PII/PCI/secrets) that raises confidentiality impact.\n\n### 4. Output\n```json\n{\n  \"id\": \"<finding id>\",\n  \"cvss_vector\": \"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N\",\n  \"cvss_score\": 7.5,\n  \"severity\": \"High\",\n  \"justification\": \"one paragraph tying each metric to concrete evidence\"\n}\n```\n\n## System Prompt\nYou are a precise vulnerability scorer. Every CVSS metric must be justified by the actual evidence in the finding — never inflate. If impact was not demonstrated, score it as None/Low, not High. Prefer defensible, reproducible scores a senior reviewer would accept. Output strict JSON.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/severity_assessor.md",
+  "warnings": []
+}

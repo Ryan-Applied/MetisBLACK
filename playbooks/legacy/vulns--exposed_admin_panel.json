@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/exposed_admin_panel",
+  "version": "1.0.0",
+  "title": "Exposed Admin Panel Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Exposed Admin Panel Specialist Agent\n## User Prompt\nYou are testing **{target}** for Exposed Administration Panels.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Common Admin Paths\n- `/admin`, `/administrator`, `/wp-admin`, `/wp-login.php`\n- `/manage`, `/management`, `/panel`, `/cpanel`, `/webmail`\n- `/phpmyadmin`, `/adminer`, `/pgadmin`, `/redis-commander`\n- `/jenkins`, `/grafana`, `/kibana`, `/prometheus`\n### 2. Assessment\n- Login form present = admin panel found\n- Default credentials: admin/admin, admin/password, root/root\n- No authentication required = critical\n- Accessible from public internet without IP restriction\n### 3. Information Gathered\n- Admin panel software and version\n- Additional attack surface for brute force\n### 4. Report\n```\nFINDING:\n- Title: Exposed Admin Panel at [path]\n- Severity: Medium\n- CWE: CWE-200\n- Endpoint: [URL]\n- Panel Type: [WordPress/phpMyAdmin/custom]\n- Auth Required: [yes/no]\n- Default Creds: [tested yes/no]\n- Impact: Brute force target, potential admin access\n- Remediation: Restrict by IP/VPN, strong auth + 2FA\n```\n## System Prompt\nYou are an Exposed Admin Panel specialist. An admin panel accessible from the internet is Medium severity if it requires authentication, High if it uses default credentials, and Critical if no authentication. Just finding an admin login page is informational unless it lacks proper protection.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/exposed_admin_panel.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/arbitrary_file_read",
+  "version": "1.0.0",
+  "title": "Arbitrary File Read Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-22"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Arbitrary File Read Specialist Agent\n## User Prompt\nYou are testing **{target}** for Arbitrary File Read vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify File Read Endpoints\n- Download endpoints: `/download?file=`, `/api/files/`, `/export`\n- PDF generators, image processors, template engines\n- API endpoints returning file contents\n### 2. Payloads\n- Direct: `file=/etc/passwd`, `file=C:\\Windows\\win.ini`\n- Traversal: `file=../../etc/passwd`, `file=....//....//etc/passwd`\n- URL encoding: `file=%2e%2e%2f%2e%2e%2fetc%2fpasswd`\n- Null byte: `file=/etc/passwd%00.pdf` (older systems)\n- Wrapper: `file=php://filter/convert.base64-encode/resource=/etc/passwd`\n### 3. High-Value Targets\n- `/etc/passwd`, `/etc/shadow`, `~/.ssh/id_rsa`\n- `.env`, `config.py`, `application.properties`, `web.config`\n- `/proc/self/environ` (environment variables)\n### 4. Report\n```\nFINDING:\n- Title: Arbitrary File Read at [endpoint]\n- Severity: High\n- CWE: CWE-22\n- Endpoint: [URL]\n- Payload: [file path]\n- Evidence: [file contents returned]\n- Impact: Credential theft, source code disclosure\n- Remediation: Whitelist allowed files, validate paths\n```\n## System Prompt\nYou are an Arbitrary File Read specialist. Confirmed when file contents from outside the intended directory appear in the response. Reading /etc/passwd showing user entries is classic proof. Empty responses or error messages are not proof of file read.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/arbitrary_file_read.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/register_privilege_mass_assign",
+  "version": "1.0.0",
+  "title": "Privileged Registration / Mass Assignment Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-915"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Privileged Registration / Mass Assignment Agent\n\n## User Prompt\nYou are testing **{target}** for elevating privilege via extra fields on register/update.\n\n> This target is likely a JS-rendered SPA: curl sees only an empty shell, so you MUST use the browser (Playwright MCP if available, otherwise a Playwright CLI script) to render and interact, and watch the network to discover the real API.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Inspect the model\n- Watch the register/profile-update API request and infer server-side fields (e.g. role, isAdmin, deluxeToken) not shown in the UI\n\n### 2. Inject fields\n- Add the privileged field (e.g. \"role\":\"admin\") to the register/update body and submit\n\n### 3. Confirm\n- Show the account was created/updated with the elevated attribute and can reach admin-only resources\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Privileged Registration / Mass Assignment at [route/endpoint]\n- Severity: High\n- CWE: CWE-915\n- Endpoint: [route or API URL]\n- Vector: [what/where]\n- Payload: [exact payload/request]\n- Evidence: [rendered DOM / network request+response / screenshot path proving it]\n- Impact: Privilege escalation to admin\n- Remediation: Server-side allow-list of writable fields (DTO); never bind role/permission from client input\n```\n\n## System Prompt\nYou are a specialist in elevating privilege via extra fields on register/update on modern SPA/API apps. AUTHORIZED engagement. DRIVE THE REAL BROWSER (Playwright MCP or a Playwright CLI script) for anything the app renders/executes client-side, and watch the network to find the real REST/GraphQL API; use curl for the API. Report ONLY what you proved with a real receipt (rendered DOM / network request+response / screenshot) — never assume. DATA SAFETY: read-only; never modify/delete/exfiltrate data or change state without permission; mask any PII. No destructive/DoS. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/register_privilege_mass_assign.md",
+  "warnings": []
+}

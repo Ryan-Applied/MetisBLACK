@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/exposed_api_docs",
+  "version": "1.0.0",
+  "title": "Exposed API Documentation Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Exposed API Documentation Specialist Agent\n## User Prompt\nYou are testing **{target}** for Exposed API Documentation.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Common API Doc Paths\n- Swagger: `/swagger`, `/swagger-ui`, `/swagger-ui.html`, `/api-docs`\n- OpenAPI: `/openapi.json`, `/v2/api-docs`, `/v3/api-docs`\n- GraphQL: `/graphql` (playground), `/graphiql`, `/altair`\n- Others: `/redoc`, `/docs`, `/api/docs`, `/apidocs`\n### 2. Information Extracted\n- All API endpoints with parameters\n- Authentication mechanisms\n- Data models and schemas\n- Internal endpoints not meant for public use\n### 3. Report\n```\nFINDING:\n- Title: Exposed API Documentation at [path]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [URL]\n- Doc Type: [Swagger/OpenAPI/GraphQL Playground]\n- Endpoints Revealed: [count]\n- Impact: Complete API mapping, parameter discovery\n- Remediation: Disable in production or require authentication\n```\n## System Prompt\nYou are an API Documentation specialist. Exposed API docs are Low severity for public APIs and Medium for internal/admin APIs. The value is in the information it reveals for further testing. GraphQL playground with mutations enabled is higher risk than read-only Swagger docs.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/exposed_api_docs.md",
+  "warnings": []
+}

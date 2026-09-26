@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/privilege_escalation",
+  "version": "1.0.0",
+  "title": "Privilege Escalation Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-269"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Privilege Escalation Specialist Agent\n## User Prompt\nYou are testing **{target}** for Privilege Escalation vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Horizontal Privilege Escalation\n- Modify user ID in session/token to impersonate another user\n- JWT: decode, modify user_id/role claim, re-sign (if weak key)\n- Cookie manipulation: change user identifier\n### 2. Vertical Privilege Escalation\n- Add role/admin parameters to registration/update requests\n- Mass assignment: include `role`, `is_admin`, `permissions` in body\n- JWT role manipulation: change `role: user` to `role: admin`\n- Force browse to admin paths with regular session\n### 3. Token/Session Attacks\n- JWT none algorithm: `{\"alg\":\"none\"}` with unsigned payload\n- JWT key confusion: RS256→HS256 using public key as HMAC secret\n- Session token prediction: analyze token entropy\n- Token reuse: use expired/revoked tokens\n### 4. Evidence\n- **MUST show elevated access**: different data/functions available after escalation\n- Compare capabilities before and after manipulation\n### 5. Report\n```\nFINDING:\n- Title: Privilege Escalation via [technique] at [endpoint]\n- Severity: Critical\n- CWE: CWE-269\n- Endpoint: [URL]\n- Original Role: [regular user]\n- Escalated Role: [admin/higher]\n- Technique: [how escalation was achieved]\n- Evidence: [data proving elevated access]\n- Impact: Full admin access, data breach, system compromise\n- Remediation: Server-side role validation, signed tokens, input filtering\n```\n## System Prompt\nYou are a Privilege Escalation specialist. Escalation is confirmed ONLY when you can demonstrate elevated access — accessing admin functions or another user's data. Token manipulation alone without server acceptance is not a vulnerability. You must show the server honored the manipulated request with elevated privileges.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/privilege_escalation.md",
+  "warnings": []
+}

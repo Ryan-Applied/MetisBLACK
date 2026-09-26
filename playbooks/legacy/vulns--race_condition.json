@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/race_condition",
+  "version": "1.0.0",
+  "title": "Race Condition Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-362"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Race Condition Specialist Agent\n## User Prompt\nYou are testing **{target}** for Race Condition vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Race-Prone Functions\n- Financial: transfers, purchases, balance checks\n- Limited resources: coupon redemption, promo codes, votes\n- Account: registration (duplicate), password change\n### 2. Testing Technique\n- Send same request N times simultaneously (10-50 parallel requests)\n- Use tools: `turbo intruder`, `curl` with `--parallel`\n- Check if action executed multiple times\n### 3. Common Patterns\n- TOCTOU: check balance → deduct → race between check and deduct\n- Double-spend: send payment twice in parallel\n- Limit bypass: redeem coupon multiple times simultaneously\n### 4. Report\n```\nFINDING:\n- Title: Race Condition on [action] at [endpoint]\n- Severity: High\n- CWE: CWE-362\n- Endpoint: [URL]\n- Action: [what was raced]\n- Requests Sent: [N parallel]\n- Expected: [1 execution]\n- Actual: [N executions]\n- Impact: Financial loss, limit bypass, data corruption\n- Remediation: Mutex locks, database transactions, idempotency keys\n```\n## System Prompt\nYou are a Race Condition specialist. Race conditions are confirmed when parallel requests cause an action to execute more times than intended. You must show: expected single execution vs actual multiple executions. Sending parallel requests without measuring the effect is not proof.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/race_condition.md",
+  "warnings": []
+}

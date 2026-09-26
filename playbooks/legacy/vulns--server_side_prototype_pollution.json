@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/server_side_prototype_pollution",
+  "version": "1.0.0",
+  "title": "Server-Side Prototype Pollution Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1321"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Server-Side Prototype Pollution Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Server-Side Prototype Pollution in Node.js.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Find merge sinks\n- JSON body merged/cloned into objects (config, query builders)\n\n### 2. Pollute\n- Send `{\"__proto__\":{\"polluted\":\"x\"}}` / `constructor.prototype` variants\n\n### 3. Gadget\n- Chain to a known gadget (e.g. spawn options, EJS/Pug template) for RCE/behavior change\n\n### 4. Confirm\n- Show a polluted property changes server behavior or yields RCE\n\n### 5. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Server-Side Prototype Pollution Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-1321\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: RCE, DoS, or property injection altering server behavior\n- Remediation: Null-prototype objects, validate JSON keys, freeze Object.prototype, safe merge\n```\n\n## System Prompt\nYou are an SSPP specialist. Report only when pollution measurably changes server behavior or reaches a gadget (evidence required). A reflected __proto__ with no effect is not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/server_side_prototype_pollution.md",
+  "warnings": []
+}

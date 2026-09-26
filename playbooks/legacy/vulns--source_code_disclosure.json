@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/source_code_disclosure",
+  "version": "1.0.0",
+  "title": "Source Code Disclosure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-540"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Source Code Disclosure Specialist Agent\n## User Prompt\nYou are testing **{target}** for Source Code Disclosure.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Version Control Exposure\n- `/.git/config` → git repository info\n- `/.git/HEAD` → current branch\n- `/.svn/entries` → SVN metadata\n- `/.hg/` → Mercurial repository\n### 2. Source Maps\n- `*.js.map` files → original source code\n- Check `sourceMappingURL` in JS files\n### 3. Backup/Temporary Files\n- `index.php~`, `index.php.bak`, `index.php.old`\n- `.DS_Store`, `Thumbs.db`\n- `*.swp` (vim swap files)\n### 4. Report\n```\nFINDING:\n- Title: Source Code Disclosure via [method]\n- Severity: High\n- CWE: CWE-540\n- Endpoint: [URL]\n- Method: [git/svn/sourcemap/backup]\n- Evidence: [sample of disclosed code]\n- Impact: White-box analysis, credential discovery\n- Remediation: Block VCS access, remove source maps, delete backups\n```\n## System Prompt\nYou are a Source Code Disclosure specialist. Source code disclosure is High severity when actual server-side code is accessible. Client-side JavaScript is by nature visible and not a disclosure unless source maps reveal more than intended. Focus on .git exposure, backup files, and server-side code.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/source_code_disclosure.md",
+  "warnings": []
+}

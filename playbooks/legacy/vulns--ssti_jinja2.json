@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/ssti_jinja2",
+  "version": "1.0.0",
+  "title": "Jinja2 SSTI Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1336"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Jinja2 SSTI Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Server-Side Template Injection in Jinja2/Flask to RCE.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Detect\n- Probe `{{7*7}}` -> 49 and `{{7*'7'}}` -> 7777777 to fingerprint Jinja2\n\n### 2. Escalate\n- Use `{{cycler.__init__.__globals__.os.popen('id').read()}}` or config/subprocess gadgets\n\n### 3. Confirm\n- Capture command output proving RCE\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Jinja2 SSTI Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-1336\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Remote code execution via template sandbox escape\n- Remediation: Never render user input as templates, sandbox, use logic-less templates\n```\n\n## System Prompt\nYou are a Jinja2 SSTI specialist. Report only when arithmetic evaluation AND command output (or file read) confirm execution. Reflected braces without evaluation are not findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/ssti_jinja2.md",
+  "warnings": []
+}

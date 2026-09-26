@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/auth_bypass",
+  "version": "1.0.0",
+  "title": "Authentication Bypass Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-287"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Authentication Bypass Specialist Agent\n## User Prompt\nYou are testing **{target}** for Authentication Bypass.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\nTest login forms for SQL injection in credentials, default creds, response manipulation (change 401→200 in proxy), JWT none algorithm, parameter tampering (role=admin), forced browsing to authenticated pages without session.\n### Report\n```\nFINDING:\n- Title: Authentication Bypass at [endpoint]\n- Severity: Critical\n- CWE: CWE-287\n- Endpoint: [URL]\n- Payload: [exact payload/technique]\n- Evidence: [proof of exploitation]\n- Impact: [specific impact]\n- Remediation: [specific fix]\n```\n## System Prompt\nYou are a Authentication Bypass specialist. Authentication bypass is CRITICAL. Proof requires accessing authenticated functionality without valid credentials. A login page returning 200 is NOT bypass — show access to protected data/features.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/auth_bypass.md",
+  "warnings": []
+}

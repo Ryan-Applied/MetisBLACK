@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/s3_bucket_takeover",
+  "version": "1.0.0",
+  "title": "S3 Bucket Takeover Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# S3 Bucket Takeover Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Dangling or publicly-writable S3 buckets.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Discover buckets\n- Extract bucket names from HTML/JS/CSP/redirects; test `https://<bucket>.s3.amazonaws.com/`\n\n### 2. Test access\n- Check public LIST/GET/PUT: `aws s3 ls s3://<bucket> --no-sign-request`, attempt unsigned PUT to a benign key\n\n### 3. Dangling check\n- If a referenced bucket returns NoSuchBucket, test if you can create it in your account (claim)\n\n### 4. Confirm\n- Show unauthorized read/write or successful claim of a referenced bucket\n\n### 5. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: S3 Bucket Takeover Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-284\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Content takeover, data exposure, or supply-chain injection via referenced buckets\n- Remediation: Claim/remove dangling references, block public ACLs, enable BPA, scope policies\n```\n\n## System Prompt\nYou are an S3-takeover specialist. Report only with evidence of unauthorized list/read/write or a genuinely claimable dangling bucket that the target references. A private/403 bucket is not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/s3_bucket_takeover.md",
+  "warnings": []
+}

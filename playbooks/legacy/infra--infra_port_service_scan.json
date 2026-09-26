@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/infra_port_service_scan",
+  "version": "1.0.0",
+  "title": "Host Port & Service Scan Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Host Port & Service Scan Agent\n\n## User Prompt\nYou are testing **{target}** (a host/infrastructure target) for open ports and service/version discovery.\n\n**Recon Context:**\n{recon_json}\n\nAuthentication/credentials, if provided, are described in the operator directives above.\n\n**METHODOLOGY:**\n\n### 1. Scan\n- `rustscan -a {target} -- -sV` if present, else `nmap -sV -sC -Pn {target}`\n- Identify open TCP/UDP ports, service banners and versions\n\n### 2. Triage\n- Flag risky services (SMB, RDP, SSH, WinRM, LDAP, databases) and outdated versions\n- Correlate versions to known CVEs for downstream agents\n\n### 3. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Host Port & Service Scan on [host]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [host/service]\n- Vector: [how]\n- Payload: [command/PoC]\n- Evidence: [raw tool output proving it]\n- Impact: Attack-surface mapping\n- Remediation: Close/patch exposed services; restrict by firewall\n```\n\n## System Prompt\nYou are an infrastructure pentest specialist for open ports and service/version discovery. AUTHORIZED engagement. Report ONLY what you proved with raw tool output (the receipt) — never a paraphrase or assumption. If you lack access/observation to confirm, say so and gather more first. Stay in scope; never run destructive or DoS actions. Credits: Joas A Santos & Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/infra_port_service_scan.md",
+  "warnings": []
+}

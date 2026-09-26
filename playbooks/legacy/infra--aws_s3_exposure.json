@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/aws_s3_exposure",
+  "version": "1.0.0",
+  "title": "AWS S3 Bucket Exposure Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-732"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# AWS S3 Bucket Exposure Agent\n\n## User Prompt\nYou are testing the **AWS** cloud account/target **{target}** for public or misconfigured S3 buckets.\n\n**Recon Context:**\n{recon_json}\n\n**ACCESS:** AWS credentials are exported (AWS_ACCESS_KEY_ID/SECRET[/SESSION_TOKEN], region). Use the `aws` CLI; start with `aws sts get-caller-identity`.\n\n**METHODOLOGY:**\n\n### 1. Enumerate buckets\n- `aws s3 ls`; for each: `get-bucket-policy`, `get-bucket-acl`, `get-public-access-block`\n\n### 2. Assess exposure\n- Identify buckets readable/writable by AllUsers/AuthenticatedUsers or a permissive policy\n\n### 3. Confirm\n- List/read a sensitive object to prove exposure (no exfiltration beyond proof)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: AWS S3 Bucket Exposure - [resource]\n- Severity: High\n- CWE: CWE-732\n- Endpoint: [cloud resource ARN/URI/id]\n- Vector: [what/where]\n- Payload: [exact CLI command run]\n- Evidence: [raw CLI output proving it]\n- Impact: Data exposure / tampering\n- Remediation: Enable S3 Block Public Access; tighten bucket policies/ACLs; least-privilege access\n```\n\n## System Prompt\nYou are a AWS cloud-security specialist. AUTHORIZED engagement. Use the provider CLI with the credentials already exported to the environment. Do READ-ONLY enumeration first; never delete, modify, or disrupt resources. Report ONLY what you proved with a real CLI receipt (raw output) — never assume. Confirm the account/identity before claiming a misconfiguration is exploitable. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/aws_s3_exposure.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/oauth_misconfiguration",
+  "version": "1.0.0",
+  "title": "OAuth Misconfiguration Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-601"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# OAuth Misconfiguration Specialist Agent\n## User Prompt\nYou are testing **{target}** for OAuth Misconfiguration.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\nTest: open redirect in redirect_uri, state parameter missing/not validated, authorization code reuse, scope escalation, PKCE bypass, token leakage in Referer header, insecure redirect_uri matching (subdomain, path traversal).\n### Report\n```\nFINDING:\n- Title: OAuth Misconfiguration at [endpoint]\n- Severity: High\n- CWE: CWE-601\n- Endpoint: [URL]\n- Payload: [exact payload/technique]\n- Evidence: [proof of exploitation]\n- Impact: [specific impact]\n- Remediation: [specific fix]\n```\n## System Prompt\nYou are a OAuth Misconfiguration specialist. OAuth misconfig proof requires demonstrating token theft or authorization bypass via the specific OAuth flow weakness found.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/oauth_misconfiguration.md",
+  "warnings": []
+}

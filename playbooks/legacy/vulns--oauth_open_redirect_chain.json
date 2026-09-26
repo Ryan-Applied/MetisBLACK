@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/oauth_open_redirect_chain",
+  "version": "1.0.0",
+  "title": "OAuth Open-Redirect Token-Theft Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-601"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# OAuth Open-Redirect Token-Theft Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Open redirect chained to OAuth token/code theft.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Find redirect in flow\n- Locate an open redirect reachable from the OAuth redirect_uri/return path\n\n### 2. Chain\n- Set redirect_uri/return to a same-site open redirect that forwards code/token off-site\n\n### 3. Confirm\n- Confirm the code/token reaches an attacker-controlled endpoint\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: OAuth Open-Redirect Token-Theft Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-601\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Authorization code/token exfiltration to attacker via redirect chain\n- Remediation: Strict exact redirect_uri matching, allowlist hosts, no open redirects in the flow\n```\n\n## System Prompt\nYou are an OAuth-redirect specialist. Report only when a code/token is actually exfiltrated to your endpoint via the chain. A standalone open redirect goes to the open_redirect agent.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/oauth_open_redirect_chain.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/xss_stored",
+  "version": "1.0.0",
+  "title": "Stored XSS Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-79"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Stored XSS Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Stored Cross-Site Scripting.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Identify Storage Points\n- Find forms that PERSIST data: comments, profiles, messages, posts, file names, settings\n- Identify the SUBMISSION endpoint (POST) and the DISPLAY endpoint (GET) — they differ\n- Test with unique canary per field to trace which inputs get stored and where displayed\n\n### 2. Two-Phase Testing\n**Phase A — Submit payload:**\n- Submit XSS payload via the storage form (include all required fields, CSRF tokens, etc.)\n- Use payloads: `<script>alert(document.domain)</script>`, `<img src=x onerror=alert(1)>`, `<svg/onload=alert(1)>`\n\n**Phase B — Verify on display page:**\n- Navigate to the page where stored content renders\n- Check if payload executes in HTML context (not escaped)\n- Verify persistence across sessions/users\n\n### 3. Advanced Stored XSS Vectors\n- Markdown injection: `[click](javascript:alert(1))`\n- File name XSS: Upload file named `\"><img src=x onerror=alert(1)>.png`\n- SVG upload: Upload SVG containing `<script>alert(1)</script>`\n- JSON stored XSS: Inject into JSON fields that render in frontend\n- Email/notification XSS: Payload in username that appears in notifications\n\n### 4. Confirm Impact\n- Stored XSS is HIGH severity because it affects OTHER users\n- Verify the payload persists and fires on page reload\n- Check if admin panels render the stored payload (escalation path)\n\n### 5. Report\n```\nFINDING:\n- Title: Stored XSS via [input field] displayed at [page]\n- Severity: High\n- CWE: CWE-79\n- Submission Endpoint: [POST URL]\n- Display Endpoint: [GET URL where it renders]\n- Payload: [exact payload submitted]\n- Evidence: [response from display page showing execution]\n- Impact: Account takeover, admin compromise, worm propagation\n- Remediation: Output encoding on display, input sanitization, CSP\n```\n\n## System Prompt\nYou are a Stored XSS specialist. Stored XSS requires PROOF of two phases: (1) payload was stored successfully, (2) payload executes when the page is viewed. Just submitting a payload is NOT a finding — you must verify it renders unescaped on the display page. This is HIGH severity because it affects all users who view the page.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/xss_stored.md",
+  "warnings": []
+}

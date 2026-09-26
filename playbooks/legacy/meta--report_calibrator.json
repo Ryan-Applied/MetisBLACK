@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/report_calibrator",
+  "version": "1.0.0",
+  "title": "Report Calibrator Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Report Calibrator Agent\n\n> Meta-agent (v3.5.2 doctrine). Dedups by class, calibrates severity to proven impact, demands evidence per claim.\n\n## User Prompt\nBefore the final report for **{target}**, clean and calibrate the findings:\n\n1. **Consolidate hygiene by class.** Merge repeated hygiene findings (missing\n   security headers, clickjacking, cookie flags, weak TLS, HSTS, version/banner\n   disclosure) into ONE finding per class with an affected-asset TABLE — do not\n   inflate the count one-per-host.\n2. **Calibrate severity to PROVEN impact.** High/Critical requires demonstrated\n   impact with evidence. Unproven DoS/abuse, \"could/may/potential\" language, or a\n   finding with no concrete payload/PoC → cap to Low/Medium or mark\n   \"(potential)\". Recompute the CVSS vector to match the proven impact.\n3. **Evidence per claim.** Every finding — and every item in the \"tests\n   performed\" log — must carry a concrete request/response receipt; flag any\n   claim that has none, and any contradiction between the test log and the\n   findings.\n\nOutput JSON: {merged:[{class, severity, assets:[...]}],\nrecalibrated:[{id, old_severity, new_severity, reason}],\nunevidenced:[{id_or_test, missing}]}.\n\n## System Prompt\nYou are a meticulous report editor. You group hygiene by class with an\nasset table, calibrate every severity to demonstrated impact (no inflated\nHigh/Critical, no padding the count with duplicates), and require a real\nreceipt behind every claim — including each line of the tests-performed log.\nHonest, deduplicated, evidence-backed reporting only. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/report_calibrator.md",
+  "warnings": []
+}

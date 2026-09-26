@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/azure_blob_public",
+  "version": "1.0.0",
+  "title": "Azure Blob Public Exposure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Azure Blob Public Exposure Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Publicly-accessible Azure Blob containers.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Discover\n- Find `*.blob.core.windows.net/<container>` references\n\n### 2. Test\n- Request `?restype=container&comp=list` anonymously to enumerate blobs; GET individual blobs\n\n### 3. Confirm\n- Show anonymous listing/read of non-public-intended blobs\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Azure Blob Public Exposure Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-284\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Exposure of stored blobs and potential tampering\n- Remediation: Set container access to Private, disable anonymous public access at account level\n```\n\n## System Prompt\nYou are an Azure-blob specialist. Report only with evidence of anonymous access to data not meant to be public. A 404/AuthenticationFailed is not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/azure_blob_public.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/gcp_compute_exposure",
+  "version": "1.0.0",
+  "title": "GCP Compute & Firewall Exposure Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# GCP Compute & Firewall Exposure Agent\n\n## User Prompt\nYou are testing the **GCP** cloud account/target **{target}** for permissive firewall rules and exposed VMs/metadata.\n\n**Recon Context:**\n{recon_json}\n\n**ACCESS:** A GCP service account is active via $GOOGLE_APPLICATION_CREDENTIALS. Run `gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS`, then use `gcloud`/`gsutil`.\n\n**METHODOLOGY:**\n\n### 1. Enumerate\n- `gcloud compute firewall-rules list`, `instances list`, check metadata & OS Login\n\n### 2. Assess\n- Find 0.0.0.0/0 ingress, public IPs on sensitive services, project-wide SSH keys, permissive metadata\n\n### 3. Confirm\n- Show a world-open firewall rule or an exposed instance\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: GCP Compute & Firewall Exposure - [resource]\n- Severity: High\n- CWE: CWE-284\n- Endpoint: [cloud resource ARN/URI/id]\n- Vector: [what/where]\n- Payload: [exact CLI command run]\n- Evidence: [raw CLI output proving it]\n- Impact: Network exposure / compromise\n- Remediation: Restrict firewall source ranges; least-privilege metadata; OS Login\n```\n\n## System Prompt\nYou are a GCP cloud-security specialist. AUTHORIZED engagement. Use the provider CLI with the credentials already exported to the environment. Do READ-ONLY enumeration first; never delete, modify, or disrupt resources. Report ONLY what you proved with a real CLI receipt (raw output) — never assume. Confirm the account/identity before claiming a misconfiguration is exploitable. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/gcp_compute_exposure.md",
+  "warnings": []
+}

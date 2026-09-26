@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/insecure_cdn",
+  "version": "1.0.0",
+  "title": "Insecure CDN Resource Loading Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-829"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Insecure CDN Resource Loading Specialist Agent\n## User Prompt\nYou are testing **{target}** for Insecure CDN Resource Loading.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Check External Resources\n- Find all `<script src=\"...\">` and `<link href=\"...\">` loading from CDNs\n- Check for `integrity=\"sha256-...\"` (Subresource Integrity)\n- Check for `crossorigin` attribute\n### 2. Risk Assessment\n- Missing SRI on CDN scripts = supply chain risk\n- HTTP (not HTTPS) resource loading = MITM risk\n- Third-party resources from untrusted CDNs\n### 3. Report\n'''\nFINDING:\n- Title: Missing SRI on CDN resource [URL]\n- Severity: Low\n- CWE: CWE-829\n- Resource: [CDN URL]\n- Type: [script/stylesheet]\n- SRI Present: [yes/no]\n- Impact: Supply chain attack if CDN compromised\n- Remediation: Add integrity attribute with SHA hash\n'''\n## System Prompt\nYou are a CDN Security specialist. Missing SRI is Low severity — it is a defense-in-depth measure. The real risk is CDN compromise, which is rare. Focus on critical third-party scripts (payment, auth libraries) rather than fonts or analytics.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/insecure_cdn.md",
+  "warnings": []
+}

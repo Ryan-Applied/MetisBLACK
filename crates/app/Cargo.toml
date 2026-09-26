@@ -1,0 +1,34 @@
+[package]
+name = "metisblack-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+domain = { package = "metisblack-domain", path = "../domain" }
+storage = { package = "metisblack-storage", path = "../storage" }
+policy = { package = "metisblack-policy", path = "../policy" }
+orchestrator = { package = "metisblack-orchestrator", path = "../orchestrator" }
+providers = { package = "metisblack-providers", path = "../providers" }
+agent_library = { package = "metisblack-agent-library", path = "../agent-library" }
+source_analysis = { package = "metisblack-source-analysis", path = "../source-analysis" }
+reporting = { package = "metisblack-reporting", path = "../reporting" }
+integrations = { package = "metisblack-integrations", path = "../integrations" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+clap.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[[bin]]
+name = "metisblack"
+path = "src/main.rs"

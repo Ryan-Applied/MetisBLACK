@@ -1,0 +1,23 @@
+[package]
+name = "metisblack-providers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+domain = { package = "metisblack-domain", path = "../domain" }
+storage = { package = "metisblack-storage", path = "../storage" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+reqwest.workspace = true
+url.workspace = true
+futures.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

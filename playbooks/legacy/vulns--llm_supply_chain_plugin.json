@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/llm_supply_chain_plugin",
+  "version": "1.0.0",
+  "title": "LLM Plugin/MCP Supply-Chain Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-829"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# LLM Plugin/MCP Supply-Chain Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Insecure LLM plugins / MCP tools (OWASP LLM03).\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Enumerate plugins/tools\n- List connected plugins/MCP servers and their declared scopes\n\n### 2. Assess trust\n- Check for unsigned/over-permissioned tools, confused-deputy potential, and unsafe auto-invocation\n\n### 3. Confirm\n- Demonstrate a concrete abuse path through a plugin (data access/action) end-to-end\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: LLM Plugin/MCP Supply-Chain Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-829\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Malicious or over-trusted plugin/tool compromises the agent and its data\n- Remediation: Vet/sign plugins, scope permissions, sandbox tool execution, pin versions\n```\n\n## System Prompt\nYou are an LLM supply-chain specialist. Report only concrete, demonstrated abuse paths through a plugin/tool — not the mere presence of plugins. Provide the end-to-end evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/llm_supply_chain_plugin.md",
+  "warnings": []
+}

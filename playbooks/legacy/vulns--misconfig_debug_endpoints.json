@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/misconfig_debug_endpoints",
+  "version": "1.0.0",
+  "title": "Debug / Management Endpoints Exposed Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-489"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Debug / Management Endpoints Exposed Agent\n\n## User Prompt\nYou are testing **{target}** for exposed debug and management endpoints.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Probe\n- Check `/actuator/*` (env,heapdump,mappings), `/debug`, `/trace`, `/phpinfo.php`, `/server-status`, `/metrics`, `/__debug__/`, `/console`, framework debug panels\n\n### 2. Assess\n- Harvest env vars/secrets, internal routes, heap/thread dumps, config\n\n### 3. Confirm\n- Show sensitive runtime data or an actionable management action reachable unauthenticated\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Debug / Management Endpoints Exposed at [endpoint]\n- Severity: High\n- CWE: CWE-489\n- Endpoint: [full URL/resource]\n- Vector: [what/where]\n- Payload: [exact request/command]\n- Evidence: [raw tool output proving it]\n- Impact: Info disclosure → RCE/takeover\n- Remediation: Disable debug/management in prod; authenticate & network-restrict them\n```\n\n## System Prompt\nYou are a specialist in exposed debug and management endpoints. AUTHORIZED engagement. Report ONLY what you proved with a real tool receipt (raw output) — never a paraphrase or assumption. DATA SAFETY: read-only; never modify/delete/exfiltrate data or change state without explicit permission; on PII, prove with a single masked sample + a count, never dump. No destructive/DoS actions. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/misconfig_debug_endpoints.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/refresh_token_abuse",
+  "version": "1.0.0",
+  "title": "Refresh Token Abuse Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-613"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Refresh Token Abuse Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Refresh-token reuse and missing rotation.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Capture tokens\n- Obtain a refresh token from the auth flow\n\n### 2. Test rotation\n- Use a refresh token twice; use it after logout; use an old one after rotation\n\n### 3. Confirm\n- Show a stale/reused refresh token still yields valid access tokens\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Refresh Token Abuse Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-613\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Stolen/old refresh tokens mint new access tokens indefinitely\n- Remediation: Rotate refresh tokens, detect reuse and revoke family, bind to client/device\n```\n\n## System Prompt\nYou are a token-lifecycle specialist. Report only when a reused/revoked/old refresh token still works, evidenced by a new access token. Proper rotation/revocation means no finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/refresh_token_abuse.md",
+  "warnings": []
+}

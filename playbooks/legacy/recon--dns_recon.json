@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/dns_recon",
+  "version": "1.0.0",
+  "title": "DNS Reconnaissance Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# DNS Reconnaissance Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to map DNS records and infrastructure relationships.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Records\n- Enumerate A/AAAA/CNAME/MX/NS/SOA/SRV/TXT\n- Check DKIM/DMARC/SPF\n\n### 2. Misconfig\n- Test dangling CNAMEs, wildcard records, AND zone transfer (AXFR)\n\n### 3. Relate\n- Cluster shared infrastructure and providers\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: DNS Reconnaissance Specialist at [asset/endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Infra mapping; zone/record misconfig discovery\n- Remediation: Harden DNS; disable zone transfers\n```\n\n## System Prompt\nYou are a DNS recon specialist. Report only records you actually resolved, with the query evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/dns_recon.md",
+  "warnings": []
+}

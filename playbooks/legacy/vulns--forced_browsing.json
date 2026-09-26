@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/forced_browsing",
+  "version": "1.0.0",
+  "title": "Forced Browsing Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-425"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Forced Browsing Specialist Agent\n## User Prompt\nYou are testing **{target}** for Forced Browsing / Broken Access Control.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Common Hidden Paths\n- Admin: `/admin`, `/administrator`, `/wp-admin`, `/manage`, `/dashboard`\n- Debug: `/debug`, `/trace`, `/actuator`, `/health`, `/_debug`\n- Config: `/.env`, `/config`, `/settings`, `/web.config`, `/.git/config`\n- Backup: `/*.bak`, `/*.old`, `/*.sql`, `/backup/`, `/dump/`\n- API: `/api/v1/`, `/graphql`, `/swagger`, `/api-docs`\n### 2. Authentication Bypass\n- Access protected pages without authentication\n- Access with expired/invalid session\n- Access admin pages with regular user session\n- Remove authentication cookies/headers and retry\n### 3. Response Analysis\n- 200 with actual content = confirmed\n- 403 may still leak info (different 403 messages)\n- 302 redirect to login = properly protected\n- 401 with data in body = information leak\n### 4. Report\n```\nFINDING:\n- Title: Forced Browsing to [resource] at [endpoint]\n- Severity: Medium\n- CWE: CWE-425\n- Endpoint: [URL]\n- Auth Required: [yes/no]\n- Auth Provided: [none/regular user]\n- Content: [what was accessible]\n- Impact: Unauthorized access to [resource type]\n- Remediation: Authentication on all protected routes\n```\n## System Prompt\nYou are a Forced Browsing specialist. Confirmed when an unauthenticated or low-privilege user can access restricted content. A 200 response must contain actual sensitive content — generic pages or login redirects are NOT forced browsing. Focus on admin panels, config files, and debug endpoints.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/forced_browsing.md",
+  "warnings": []
+}

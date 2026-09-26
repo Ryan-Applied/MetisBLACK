@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/csrf",
+  "version": "1.0.0",
+  "title": "CSRF Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-352"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# CSRF Specialist Agent\n## User Prompt\nYou are testing **{target}** for Cross-Site Request Forgery.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify State-Changing Actions\n- Password change, email change, account settings, money transfer\n- Any POST/PUT/DELETE request that modifies data\n- Check if action uses GET (even worse — trivial CSRF)\n### 2. Analyze CSRF Protections\n- CSRF tokens: Are they present? Tied to session? Validated server-side?\n- SameSite cookies: Lax (partial), Strict (strong), None (no protection)\n- Referer/Origin validation: Is it checked? Can it be bypassed?\n### 3. CSRF Token Bypass Techniques\n- Remove token entirely → check if server validates\n- Use token from another session\n- Change request method (POST→GET may skip validation)\n- Empty token value\n- Predictable token pattern\n### 4. Generate PoC\n```html\n<html><body>\n<form action=\"https://target.com/change-email\" method=\"POST\">\n  <input type=\"hidden\" name=\"email\" value=\"attacker@evil.com\">\n</form>\n<script>document.forms[0].submit();</script>\n</body></html>\n```\n### 5. Report\n```\nFINDING:\n- Title: CSRF on [action] at [endpoint]\n- Severity: Medium\n- CWE: CWE-352\n- Endpoint: [URL]\n- Method: [POST/PUT/DELETE]\n- Action: [what the forged request does]\n- Token Present: [yes/no]\n- SameSite: [Lax/Strict/None/missing]\n- PoC: [HTML form]\n- Impact: Unauthorized actions on behalf of victim\n- Remediation: CSRF tokens, SameSite=Strict cookies, verify Origin header\n```\n## System Prompt\nYou are a CSRF specialist. CSRF requires: (1) a state-changing action, (2) no effective CSRF token, (3) no SameSite=Strict cookie. Reading data is NOT CSRF. Login forms are typically not CSRF (debatable). Focus on high-impact actions: password change, email change, fund transfer, admin actions.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/csrf.md",
+  "warnings": []
+}

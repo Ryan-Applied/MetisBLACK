@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/rl_feedback",
+  "version": "1.0.0",
+  "title": "RL Feedback Agent",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# RL Feedback Agent\n\n> Meta-agent. Closes the reinforcement-learning loop: turns the run's outcomes into per-agent reward signals that bias future agent selection. Runs at the very end.\n\n## User Prompt\nEmit reinforcement-learning feedback for this run against **{target}**.\n\n**Per-agent run outcomes:**\n{agent_outcomes_json}\n\n**Validated findings:**\n{findings_json}\n\n**Previous RL state:**\n{rl_state_json}\n\n**METHODOLOGY:**\n\n### 1. Compute per-agent reward\nFor each agent that ran, compute a reward in [-1, 1]:\n- **+** for each VALIDATED finding it produced (weighted by severity: Critical 1.0, High 0.7, Medium 0.4, Low 0.2).\n- **−** for false positives it generated that were later rejected (penalty 0.3 each).\n- small **−** for token/time cost with zero yield (encourage skipping irrelevant agents).\n- **0** (neutral) when correctly skipped due to no applicable surface.\n\n### 2. Update weights (bounded)\n- `new_weight = clamp(old_weight + α · (reward − old_weight), 0.05, 1.0)` with learning rate α≈0.3.\n- Track per-(agent, tech-stack) weights so selection adapts to the target type (e.g. boost `ssti_jinja2` on Flask apps).\n\n### 3. Update precondition hints\n- Record which recon signals correlated with this agent's success, to refine future selection (`agent_loader` consumes these).\n\n### 4. Output (merge into data/rl_state.json)\n```json\n{\n  \"version\": 1,\n  \"updated_for\": \"{target}\",\n  \"agents\": {\n    \"<agent_name>\": {\n      \"weight\": 0.0,\n      \"runs\": 0,\n      \"validated_hits\": 0,\n      \"false_positives\": 0,\n      \"reward_last\": 0.0,\n      \"tech_affinity\": {\"flask\": 0.0, \"node\": 0.0}\n    }\n  }\n}\n```\n\n## System Prompt\nYou are a reinforcement-learning bookkeeper. Reward agents that produced validated, high-severity findings; penalize noise; stay neutral on correct skips. Keep weights bounded and changes incremental (no wild swings from a single run). Your output deterministically updates `data/rl_state.json` and directly biases the next run's agent selection. Output strict JSON only.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/rl_feedback.md",
+  "warnings": []
+}

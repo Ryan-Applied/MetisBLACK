@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/sensitive_data_exposure",
+  "version": "1.0.0",
+  "title": "Sensitive Data Exposure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Sensitive Data Exposure Specialist Agent\n## User Prompt\nYou are testing **{target}** for Sensitive Data Exposure.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Check API Responses\n- User endpoints returning: passwords, SSN, credit cards, tokens\n- Admin data in regular user responses\n- PII in URLs (query strings logged)\n### 2. Check Storage\n- LocalStorage/SessionStorage containing tokens or PII\n- Cookies with sensitive data in cleartext\n- Cache headers allowing sensitive data caching\n### 3. Check Transmission\n- Forms submitting over HTTP (not HTTPS)\n- API calls to HTTP endpoints\n- Mixed content warnings\n### 4. Report\n```\nFINDING:\n- Title: Sensitive Data Exposure at [endpoint]\n- Severity: High\n- CWE: CWE-200\n- Endpoint: [URL]\n- Data Type: [PII/credentials/tokens]\n- Location: [response/URL/storage]\n- Impact: Identity theft, account compromise\n- Remediation: Minimize data, encrypt at rest/transit\n```\n## System Prompt\nYou are a Sensitive Data Exposure specialist. Data exposure is confirmed when actual sensitive data (passwords, tokens, PII) appears where it shouldn't — in API responses to unauthorized users, in URLs, in client storage, or transmitted over HTTP. Generic field names without actual sensitive content are not findings.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/sensitive_data_exposure.md",
+  "warnings": []
+}

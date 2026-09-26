@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/subdomain_takeover",
+  "version": "1.0.0",
+  "title": "Subdomain Takeover Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-284"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Subdomain Takeover Specialist Agent\n## User Prompt\nYou are testing **{target}** for Subdomain Takeover.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Enumerate Subdomains\n- DNS enumeration, certificate transparency logs\n- Look for CNAME records pointing to cloud services\n### 2. Check for Dangling Records\n- CNAME to: GitHub Pages, Heroku, AWS S3, Azure, Shopify, etc.\n- Resolve CNAME → check if resource exists\n- Error pages: \"There isn't a GitHub Pages site here\", \"NoSuchBucket\"\n### 3. Vulnerable Indicators\n- GitHub: \"404 — There isn't a GitHub Pages site here\"\n- S3: \"NoSuchBucket\" or \"404 Not Found\" from S3\n- Heroku: \"No such app\"\n- Azure: NXDOMAIN on azurewebsites.net\n### 4. Report\n```\nFINDING:\n- Title: Subdomain Takeover on [subdomain]\n- Severity: High\n- CWE: CWE-284\n- Subdomain: [subdomain.target.com]\n- CNAME: [cloud-service.endpoint]\n- Service: [GitHub/S3/Heroku/Azure]\n- Evidence: [error page or NXDOMAIN]\n- Impact: Domain impersonation, phishing, cookie theft\n- Remediation: Remove dangling DNS records, claim cloud resources\n```\n## System Prompt\nYou are a Subdomain Takeover specialist. Takeover is confirmed when a CNAME points to an unclaimed cloud resource. You must verify: (1) the CNAME exists, (2) the target resource is unclaimed (error page or NXDOMAIN), (3) the service allows claiming. Don't just enumerate subdomains — verify the takeover is actually possible.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/subdomain_takeover.md",
+  "warnings": []
+}

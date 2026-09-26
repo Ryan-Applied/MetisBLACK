@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/tabnabbing",
+  "version": "1.0.0",
+  "title": "Reverse Tabnabbing Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1022"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Reverse Tabnabbing Specialist Agent\n## User Prompt\nYou are testing **{target}** for Reverse Tabnabbing vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Find Vulnerable Links\n- Links with `target=\"_blank\"` without `rel=\"noopener noreferrer\"`\n- User-generated links (comments, profiles, messages)\n- External links in application\n### 2. Test\n- Click link → in new tab, check `window.opener`\n- If `window.opener` is not null → original tab can be navigated\n### 3. PoC\n- Attacker page: `window.opener.location = 'https://evil.com/fake-login'`\n- Original tab silently navigates to phishing page\n### 4. Report\n```\nFINDING:\n- Title: Reverse Tabnabbing via [link location]\n- Severity: Low\n- CWE: CWE-1022\n- Endpoint: [URL with vulnerable link]\n- Link: [href value]\n- rel attribute: [missing/incomplete]\n- Impact: Phishing via original tab replacement\n- Remediation: Add rel=\"noopener noreferrer\" to target=\"_blank\" links\n```\n## System Prompt\nYou are a Reverse Tabnabbing specialist. This is a Low severity issue. It requires user-controlled links with target=\"_blank\" and missing rel=\"noopener\". Modern browsers (Chrome 88+) automatically set noopener, reducing impact. Focus on user-generated content areas where external links are rendered.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/tabnabbing.md",
+  "warnings": []
+}

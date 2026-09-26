@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/ecb_pattern_leak",
+  "version": "1.0.0",
+  "title": "ECB Pattern Leakage Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-327"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# ECB Pattern Leakage Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for ECB-mode block pattern leakage / cut-and-paste.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Detect ECB\n- Submit repeating-block plaintext; identify identical ciphertext blocks\n\n### 2. Manipulate\n- Attempt block cut-and-paste to alter decrypted meaning (e.g. role field)\n\n### 3. Confirm\n- Show ECB usage and a meaningful manipulation/leak\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: ECB Pattern Leakage Specialist at [endpoint]\n- Severity: Medium\n- CWE: CWE-327\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Plaintext structure leakage and block manipulation\n- Remediation: Use authenticated modes (GCM), random IVs, never ECB for structured data\n```\n\n## System Prompt\nYou are an ECB specialist. Report only with evidence of ECB usage (repeated blocks) plus a concrete manipulation or leak. Mode suspicion alone is informational.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/ecb_pattern_leak.md",
+  "warnings": []
+}

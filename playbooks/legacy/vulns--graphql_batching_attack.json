@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/graphql_batching_attack",
+  "version": "1.0.0",
+  "title": "GraphQL Batching Attack Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-799"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# GraphQL Batching Attack Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Query batching to bypass rate limits / brute force.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Detect batching\n- Test array-of-operations and aliased mutations in one request\n\n### 2. Amplify\n- Pack many login/OTP attempts into a single batched request\n\n### 3. Confirm\n- Show many auth attempts executed despite per-request rate limits\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: GraphQL Batching Attack Specialist at [endpoint]\n- Severity: Medium\n- CWE: CWE-799\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Rate-limit and lockout bypass enabling credential brute force / OTP guessing\n- Remediation: Disable array batching or apply per-operation limits, cost analysis, global throttling\n```\n\n## System Prompt\nYou are a GraphQL batching specialist. Report only when batching demonstrably defeats a real rate-limit/lockout control (evidenced by accepted attempts). Mere batching support is informational.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/graphql_batching_attack.md",
+  "warnings": []
+}

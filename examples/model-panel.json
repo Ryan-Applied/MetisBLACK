@@ -1,0 +1,46 @@
+{
+  "quorum": 2,
+  "acceptance_ratio_millis": 600,
+  "members": [
+    {
+      "id": "candidate-openai",
+      "role": "candidate",
+      "deployment": "primary",
+      "provider": {
+        "kind": "openai",
+        "model": "MODEL_ID",
+        "endpoint": "https://api.openai.com/v1",
+        "key_env": "OPENAI_API_KEY",
+        "timeout_seconds": 60,
+        "max_output_tokens": 4096
+      },
+      "max_input_tokens": 32000,
+      "max_output_tokens": 4096,
+      "max_cost_microusd": 250000,
+      "input_cost_microusd_per_million_tokens": 5000000,
+      "output_cost_microusd_per_million_tokens": 15000000,
+      "timeout_seconds": 60,
+      "weight_millis": 1000
+    },
+    {
+      "id": "review-anthropic",
+      "role": "reviewer",
+      "deployment": "independent",
+      "provider": {
+        "kind": "anthropic",
+        "model": "MODEL_ID",
+        "endpoint": "https://api.anthropic.com",
+        "key_env": "ANTHROPIC_API_KEY",
+        "timeout_seconds": 60,
+        "max_output_tokens": 4096
+      },
+      "max_input_tokens": 32000,
+      "max_output_tokens": 4096,
+      "max_cost_microusd": 250000,
+      "input_cost_microusd_per_million_tokens": 5000000,
+      "output_cost_microusd_per_million_tokens": 15000000,
+      "timeout_seconds": 60,
+      "weight_millis": 1000
+    }
+  ]
+}

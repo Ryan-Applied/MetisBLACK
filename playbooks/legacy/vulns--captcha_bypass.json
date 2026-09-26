@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/captcha_bypass",
+  "version": "1.0.0",
+  "title": "CAPTCHA Bypass Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-804"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# CAPTCHA Bypass Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for CAPTCHA bypass enabling automation abuse.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Inspect flow\n- Check if CAPTCHA token is verified server-side, reusable, or removable\n\n### 2. Bypass\n- Reuse a valid token, omit it, replay, or exploit weak/no verification\n\n### 3. Confirm\n- Show the protected action succeeds without solving a fresh CAPTCHA\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: CAPTCHA Bypass Specialist at [endpoint]\n- Severity: Medium\n- CWE: CWE-804\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Automated brute force/abuse where CAPTCHA was the control\n- Remediation: Server-side verification, token single-use, rate limiting independent of CAPTCHA\n```\n\n## System Prompt\nYou are a CAPTCHA-bypass specialist. Report only when the protected action provably succeeds without a valid fresh solve. Solving via a paid service is out of scope; focus on verification flaws.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/captcha_bypass.md",
+  "warnings": []
+}

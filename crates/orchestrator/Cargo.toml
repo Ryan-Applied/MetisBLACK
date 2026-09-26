@@ -1,0 +1,35 @@
+[package]
+name = "metisblack-orchestrator"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+domain = { package = "metisblack-domain", path = "../domain" }
+storage = { package = "metisblack-storage", path = "../storage" }
+policy = { package = "metisblack-policy", path = "../policy" }
+evidence = { package = "metisblack-evidence", path = "../evidence" }
+tool_runtime = { package = "metisblack-tool-runtime", path = "../tool-runtime" }
+world_model = { package = "metisblack-world-model", path = "../world-model" }
+agent_library = { package = "metisblack-agent-library", path = "../agent-library" }
+source_analysis = { package = "metisblack-source-analysis", path = "../source-analysis" }
+providers = { package = "metisblack-providers", path = "../providers" }
+reporting = { package = "metisblack-reporting", path = "../reporting" }
+integrations = { package = "metisblack-integrations", path = "../integrations" }
+browser_runtime = { package = "metisblack-browser-runtime", path = "../browser-runtime" }
+cloud_runtime = { package = "metisblack-cloud-runtime", path = "../cloud-runtime" }
+model_panel = { package = "metisblack-model-panel", path = "../model-panel" }
+chain_engine = { package = "metisblack-chain-engine", path = "../chain-engine" }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tokio.workspace = true
+url.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

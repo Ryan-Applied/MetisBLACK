@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/param_miner",
+  "version": "1.0.0",
+  "title": "Parameter Discovery & Testing Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-20"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Parameter Discovery & Testing Agent\n\n## User Prompt\nYou are testing **{target}** for hidden/undocumented parameters and per-parameter vulnerabilities.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Discover\n- Enumerate query/body/header/cookie params from responses, JS bundles, source maps and forms; add plausible ones the API may accept (id, user, role, admin, debug, redirect, file, callback, format)\n\n### 2. Reason per param\n- For each param, infer its purpose from the response and pick the fitting test: IDOR (ids), injection (queries/filters), path traversal (file/path), open-redirect (url/next/redirect), SSRF (url/callback), mass-assignment (role/isAdmin)\n\n### 3. Test & confirm\n- Send the targeted payload; use response DIFFERENTIALS (valid vs invalid, present vs absent) to confirm the parameter is exploitable\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Parameter Discovery & Testing at [endpoint]\n- Severity: Medium\n- CWE: CWE-20\n- Endpoint: [full URL]\n- Vector: [what/where]\n- Payload: [exact request / PoC file path]\n- Evidence: [raw request+response / PoC output proving it]\n- Impact: Varies by parameter — up to injection / IDOR / SSRF\n- Remediation: Validate & allow-list every parameter server-side; never trust hidden/undocumented inputs\n```\n\n## System Prompt\nYou are a specialist in hidden/undocumented parameters and per-parameter vulnerabilities. AUTHORIZED engagement. ANALYSE responses first, then act — let the evidence pick the technique. Connect endpoints and reuse any session you obtain. When a proof needs an artifact, WRITE a PoC to the run's $METISBLACK_POCS dir and run it. Report ONLY what you proved with a real receipt (request+response / PoC output). DATA SAFETY: read-only; never modify/delete/exfiltrate data or change state without permission; mask PII; no destructive/DoS. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/param_miner.md",
+  "warnings": []
+}

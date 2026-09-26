@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/jwt_alg_confusion",
+  "version": "1.0.0",
+  "title": "JWT Algorithm Confusion Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-347"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# JWT Algorithm Confusion Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for RS256-to-HS256 algorithm confusion in JWT verification.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Obtain public key\n- Recover the RSA public key (jwks_uri, /pubkey, or derive from two tokens)\n\n### 2. Forge\n- Re-sign a modified payload with HS256 using the public key bytes as the HMAC secret (jwt_tool -X k)\n\n### 3. Confirm\n- Submit the forged token (e.g. admin) and confirm it is accepted\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: JWT Algorithm Confusion Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-347\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Forge arbitrary tokens using the public key as HMAC secret\n- Remediation: Pin expected alg, separate verification keys by alg, reject alg switching\n```\n\n## System Prompt\nYou are a JWT specialist. Report only when a forged token is accepted by the server granting changed claims. Inability to verify acceptance means no finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/jwt_alg_confusion.md",
+  "warnings": []
+}

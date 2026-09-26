@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/aspnet_debug_trace",
+  "version": "1.0.0",
+  "title": "ASP.NET Debug/Trace Exposure Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-489"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# ASP.NET Debug/Trace Exposure Agent\n\n## User Prompt\nYou are testing **{target}** for debug/trace enabled in production ASP.NET.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Probe\n- Request `trace.axd`; send `DEBUG` verb; check `<compilation debug=...>` leakage via errors\n\n### 2. Assess\n- Harvest request/session data, stack traces, app internals from trace output\n\n### 3. Confirm\n- Show sensitive runtime data exposed\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: ASP.NET Debug/Trace Exposure at [endpoint]\n- Severity: Medium\n- CWE: CWE-489\n- Endpoint: [full URL]\n- Vector: [what/where]\n- Payload: [exact payload/command]\n- Evidence: [raw tool output proving it]\n- Impact: Information disclosure\n- Remediation: Disable debug/trace; custom errors\n```\n\n## System Prompt\nYou are a specialist in debug/trace enabled in production ASP.NET. AUTHORIZED engagement. Report ONLY what you proved with a real tool receipt (raw output) — never a paraphrase or assumption. Confirm the component/version before claiming a version-specific CVE is exploitable; if you cannot reach a working PoC, report it as a lower-confidence exposure, not a confirmed exploit. No destructive/DoS actions. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/aspnet_debug_trace.md",
+  "warnings": []
+}

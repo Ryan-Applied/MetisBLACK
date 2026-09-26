@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/parameter_discovery",
+  "version": "1.0.0",
+  "title": "Parameter Discovery Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Parameter Discovery Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to enumerate hidden request parameters and inputs.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Mine\n- Extract params from JS, forms, history (gau), and docs\n\n### 2. Bruteforce\n- Use arjun/param-miner style discovery with reflection detection\n\n### 3. Hand off\n- Provide the param inventory to injection specialists\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Parameter Discovery Specialist at [asset/endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Hidden params enable injection/logic attacks\n- Remediation: Validate and document all accepted parameters\n```\n\n## System Prompt\nYou are a parameter-discovery specialist. Report only parameters you confirmed the app accepts/reflects, with evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/parameter_discovery.md",
+  "warnings": []
+}

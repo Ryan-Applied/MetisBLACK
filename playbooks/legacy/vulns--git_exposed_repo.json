@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/git_exposed_repo",
+  "version": "1.0.0",
+  "title": "Exposed .git Repository Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-527"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Exposed .git Repository Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Exposed .git directory enabling source/secret recovery.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Detect\n- Request `/.git/HEAD`, `/.git/config`; confirm git internals are served\n\n### 2. Dump\n- Use `git-dumper` to reconstruct the repo from the exposed objects\n\n### 3. Confirm\n- Show recovered source and any secrets in history\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Exposed .git Repository Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-527\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Full source code and historical secret disclosure\n- Remediation: Block access to .git, deploy build artifacts only, rotate leaked secrets\n```\n\n## System Prompt\nYou are a .git-exposure specialist. Report only when git internals are actually served and source/secrets are recoverable. A 403/404 on /.git is not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/git_exposed_repo.md",
+  "warnings": []
+}

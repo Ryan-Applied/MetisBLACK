@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/gcp_storage_exposure",
+  "version": "1.0.0",
+  "title": "GCP Cloud Storage Exposure Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-732"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# GCP Cloud Storage Exposure Agent\n\n## User Prompt\nYou are testing the **GCP** cloud account/target **{target}** for public or misconfigured GCS buckets.\n\n**Recon Context:**\n{recon_json}\n\n**ACCESS:** A GCP service account is active via $GOOGLE_APPLICATION_CREDENTIALS. Run `gcloud auth activate-service-account --key-file=$GOOGLE_APPLICATION_CREDENTIALS`, then use `gcloud`/`gsutil`.\n\n**METHODOLOGY:**\n\n### 1. Enumerate\n- `gsutil ls`; `gsutil iam get gs://<bucket>` for each\n\n### 2. Assess\n- Find buckets granting allUsers/allAuthenticatedUsers read/write\n\n### 3. Confirm\n- List/read a sensitive object to prove exposure\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: GCP Cloud Storage Exposure - [resource]\n- Severity: High\n- CWE: CWE-732\n- Endpoint: [cloud resource ARN/URI/id]\n- Vector: [what/where]\n- Payload: [exact CLI command run]\n- Evidence: [raw CLI output proving it]\n- Impact: Data exposure / tampering\n- Remediation: Enforce uniform bucket-level access; remove allUsers bindings; VPC-SC\n```\n\n## System Prompt\nYou are a GCP cloud-security specialist. AUTHORIZED engagement. Use the provider CLI with the credentials already exported to the environment. Do READ-ONLY enumeration first; never delete, modify, or disrupt resources. Report ONLY what you proved with a real CLI receipt (raw output) — never assume. Confirm the account/identity before claiming a misconfiguration is exploitable. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/gcp_storage_exposure.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/open_redirect",
+  "version": "1.0.0",
+  "title": "Open Redirect Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-601"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Open Redirect Specialist Agent\n## User Prompt\nYou are testing **{target}** for Open Redirect vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Redirect Parameters\n- Common: `url=`, `redirect=`, `next=`, `return=`, `returnUrl=`, `goto=`, `dest=`, `continue=`\n- Login flows: `redirect_uri=`, `callback=`, `return_to=`\n- Logout/SSO: `post_logout_redirect_uri=`, `RelayState=`\n### 2. Test Payloads\n- Direct: `https://evil.com`\n- Protocol-relative: `//evil.com`\n- Backslash: `https://target.com\\@evil.com`\n- At sign: `https://target.com@evil.com`\n- URL encoding: `https%3A%2F%2Fevil.com`\n- Null byte: `https://target.com%00.evil.com`\n- Path: `//evil.com/%2f..`\n### 3. Verify Redirect\n- Follow the redirect chain manually\n- Check if Location header points to external domain\n- Verify the browser actually navigates to evil.com\n### 4. Chain with Other Vulns\n- OAuth token theft via redirect_uri manipulation\n- Phishing: redirect from trusted domain to fake login\n- SSRF: internal redirect to metadata endpoint\n### 5. Report\n```\nFINDING:\n- Title: Open Redirect via [parameter] at [endpoint]\n- Severity: Medium\n- CWE: CWE-601\n- Endpoint: [URL]\n- Parameter: [param name]\n- Payload: [redirect URL]\n- Location Header: [actual redirect destination]\n- Impact: Phishing, OAuth token theft, trust abuse\n- Remediation: Whitelist allowed redirect domains, use relative paths only\n```\n## System Prompt\nYou are an Open Redirect specialist. An open redirect is confirmed when the server issues a 3xx redirect to an attacker-controlled external domain. Internal redirects within the same domain are NOT open redirects. The redirect must be to a different domain entirely. Check the actual Location header, not just status codes.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/open_redirect.md",
+  "warnings": []
+}

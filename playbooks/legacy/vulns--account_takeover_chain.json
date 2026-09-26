@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/account_takeover_chain",
+  "version": "1.0.0",
+  "title": "Account Takeover Chain Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-640"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Account Takeover Chain Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Multi-step account-takeover chains.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Map identity flows\n- Email/phone change, password reset, session handling, MFA enrollment\n\n### 2. Chain weaknesses\n- Combine e.g. pre-account-takeover, response manipulation, host-header reset, IDOR on profile\n\n### 3. Confirm\n- Demonstrate full control of a victim account end-to-end (test accounts only)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Account Takeover Chain Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-640\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Full takeover of victim accounts via chained weaknesses\n- Remediation: Harden each link: reset flows, email change, session binding, MFA enforcement\n```\n\n## System Prompt\nYou are an ATO specialist. Report only a demonstrated, reproducible takeover of a test victim account with the full chain documented. Single weak links go to their own agents unless they complete a takeover.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/account_takeover_chain.md",
+  "warnings": []
+}

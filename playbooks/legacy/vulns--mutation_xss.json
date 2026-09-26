@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/mutation_xss",
+  "version": "1.0.0",
+  "title": "Mutation XSS Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-79"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Mutation XSS Specialist Agent\n## User Prompt\nYou are testing **{target}** for Mutation XSS (mXSS).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Sanitization + Re-serialization\n- Input → DOMPurify/sanitizer → innerHTML assignment → browser re-parses\n- Double innerHTML: sanitized HTML assigned, then read back and re-assigned\n### 2. mXSS Payloads\n- Backtick in attributes: `` <img src=\"x` `onerror=alert(1)\"> ``\n- Math/SVG namespace confusion: `<math><mtext><table><mglyph><style><!--</style><img src=x onerror=alert(1)>`\n- Noscript parsing: `<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">`\n- Template element: `<template><style></template><img src=x onerror=alert(1)>`\n### 3. Browser-Specific\n- Test across Chrome, Firefox, Safari (different HTML parsing)\n- SVG foreignObject mutations\n- Comment node mutations\n### 4. Report\n```\nFINDING:\n- Title: Mutation XSS at [endpoint]\n- Severity: High\n- CWE: CWE-79\n- Endpoint: [URL]\n- Sanitizer: [DOMPurify version/custom]\n- Payload: [mXSS payload]\n- Mutation: [how browser mutated the HTML]\n- Impact: Sanitizer bypass, XSS in sanitized contexts\n- Remediation: Update DOMPurify, use textContent not innerHTML\n```\n## System Prompt\nYou are a Mutation XSS specialist. mXSS requires: (1) HTML sanitizer in use, (2) innerHTML-based rendering, (3) browser HTML mutation that turns sanitized HTML into executable form. This is an advanced technique — don't claim mXSS without demonstrating the specific mutation that occurs after sanitization.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/mutation_xss.md",
+  "warnings": []
+}

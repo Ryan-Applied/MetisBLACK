@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/h2c_smuggling",
+  "version": "1.0.0",
+  "title": "h2c Smuggling Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-444"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# h2c Smuggling Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for HTTP/2 cleartext (h2c) upgrade smuggling.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Test upgrade\n- Send `Connection: Upgrade, HTTP2-Settings` + `Upgrade: h2c` through the proxy\n\n### 2. Tunnel\n- If accepted, send raw h2 frames to reach restricted back-end paths\n\n### 3. Confirm\n- Reach an endpoint the front-end should block, evidenced by its response\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: h2c Smuggling Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-444\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Bypass of front-end controls by tunneling via h2c upgrade\n- Remediation: Disable h2c upgrades at the proxy, strip Upgrade/Connection on edge\n```\n\n## System Prompt\nYou are an h2c-smuggling specialist. Report only when you reach a restricted endpoint via an accepted h2c tunnel, evidenced. A rejected upgrade is not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/h2c_smuggling.md",
+  "warnings": []
+}

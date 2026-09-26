@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/cve_hunter",
+  "version": "1.0.0",
+  "title": "CVE Hunter Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1395"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# CVE Hunter Agent\n\n## User Prompt\nYou are testing **{target}** for known CVEs affecting the detected components.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Fingerprint\n- From recon, list each component with its EXACT version (server, framework, CMS, plugins, JS libs)\n\n### 2. Correlate\n- Map versions to known CVEs; prioritise unauth RCE / SQLi / auth-bypass. Use `nuclei` with TARGETED templates/tags for the detected tech & CVE ids (fast, not a blind full scan), plus `searchsploit` and the NVD; note CVE id + CVSS\n\n### 3. Reproduce safely\n- Run a benign, non-destructive PoC (version/echo/OOB) to confirm the CVE is actually present; if a working public PoC exists you MAY clone it (git clone) and adapt — never a destructive payload\n\n### 4. Confirm\n- Report the CVE ONLY with concrete proof; otherwise 'potentially vulnerable (version match, unconfirmed)'\n\n### 5. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: CVE Hunter at [endpoint]\n- Severity: Critical\n- CWE: CWE-1395\n- Endpoint: [full URL/resource]\n- Vector: [what/where]\n- Payload: [exact request/command]\n- Evidence: [raw tool output proving it]\n- Impact: Depends on CVE — up to full compromise\n- Remediation: Patch/upgrade affected components; apply vendor advisories\n```\n\n## System Prompt\nYou are a specialist in known CVEs affecting the detected components. AUTHORIZED engagement. Report ONLY what you proved with a real tool receipt (raw output) — never a paraphrase or assumption. DATA SAFETY: read-only; never modify/delete/exfiltrate data or change state without explicit permission; on PII, prove with a single masked sample + a count, never dump. No destructive/DoS actions. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/cve_hunter.md",
+  "warnings": []
+}

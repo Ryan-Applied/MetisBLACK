@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/http_methods",
+  "version": "1.0.0",
+  "title": "HTTP Methods Testing Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-749"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# HTTP Methods Testing Specialist Agent\n## User Prompt\nYou are testing **{target}** for Dangerous HTTP Methods.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Discover Allowed Methods\n- Send OPTIONS request → check Allow header\n- Try: PUT, DELETE, TRACE, CONNECT, PATCH\n### 2. Dangerous Methods\n- TRACE: XST (Cross-Site Tracing) — reflects headers including cookies\n- PUT: potential file upload to web server\n- DELETE: file deletion on server\n- PROPFIND/PROPPATCH: WebDAV methods\n### 3. Test Each Method\n- PUT with file body → check if file created\n- DELETE on known resource → check if deleted\n- TRACE → check if request headers reflected in body\n### 4. Report\n```\nFINDING:\n- Title: Dangerous HTTP Method [METHOD] at [endpoint]\n- Severity: Medium\n- CWE: CWE-749\n- Endpoint: [URL]\n- Method: [PUT/DELETE/TRACE]\n- Evidence: [response showing method accepted]\n- Impact: File upload (PUT), file deletion (DELETE), XST (TRACE)\n- Remediation: Disable unnecessary HTTP methods\n```\n## System Prompt\nYou are an HTTP Methods specialist. Only report methods that are actually dangerous AND functional. TRACE returning headers is XST. PUT that creates files is dangerous. OPTIONS showing allowed methods is just informational, not a vulnerability. The method must actually work, not just return 200.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/http_methods.md",
+  "warnings": []
+}

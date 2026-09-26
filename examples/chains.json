@@ -1,0 +1,7 @@
+{
+  "enabled": true,
+  "template_ids": [],
+  "max_risk": "low",
+  "max_steps": 40,
+  "max_state_changes": 0
+}

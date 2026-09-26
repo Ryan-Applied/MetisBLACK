@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/role_replay_attack_specialist",
+  "version": "1.0.0",
+  "title": "Replay Attack Prompt",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Replay Attack Prompt\n\n## User Prompt\nAnalyze the provided network traffic or authentication logs for potential replay attack vectors. Suggest methods to perform and prevent replay attacks.\n\n**Network Traffic/Authentication Logs:**\n{traffic_logs_json}\n\n**Instructions:**\n1.  Identify any captured sessions, authentication tokens, or sensitive information that could be replayed.\n2.  Describe how a replay attack could be executed.\n3.  Propose countermeasures to prevent such attacks (e.g., nonces, timestamps, session IDs).\n4.  Assess the impact of a successful replay attack.\n\n## System Prompt\nYou are a security expert specializing in network protocols and authentication mechanisms. Your task is to identify weaknesses leading to replay attacks and provide robust defensive strategies. Focus on practical exploitation and effective mitigation.",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/role_replay_attack_specialist.md",
+  "warnings": []
+}

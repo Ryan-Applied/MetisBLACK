@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/dependency_confusion",
+  "version": "1.0.0",
+  "title": "Dependency Confusion Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-427"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Dependency Confusion Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Dependency confusion via internal package names on public registries.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Harvest internal names\n- Extract package names from source maps, lockfiles, errors, package.json, requirements\n\n### 2. Check registries\n- Test whether those names are unclaimed on npm/PyPI/RubyGems public registries\n\n### 3. Confirm\n- Show an internal package name is publicly claimable (do NOT publish malware — claim only a benign PoC name in scope)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Dependency Confusion Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-427\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Malicious public package shadows an internal one, enabling supply-chain RCE\n- Remediation: Scope/namespace internal packages, pin registries, use private proxies with priority\n```\n\n## System Prompt\nYou are a dependency-confusion specialist. Report only when a referenced internal package is genuinely unclaimed publicly and would be resolved by the target's tooling. Never publish actual malicious packages; use benign PoC only with authorization.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/dependency_confusion.md",
+  "warnings": []
+}

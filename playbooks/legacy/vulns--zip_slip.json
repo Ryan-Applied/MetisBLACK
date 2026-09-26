@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/zip_slip",
+  "version": "1.0.0",
+  "title": "Zip Slip Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-22"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Zip Slip Specialist Agent\n## User Prompt\nYou are testing **{target}** for Zip Slip (Archive Path Traversal).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Archive Upload/Processing\n- File import features accepting ZIP, TAR, JAR\n- Bulk upload, theme/plugin installation\n- Data import from archive files\n### 2. Craft Malicious Archive\n- Create ZIP with entries like `../../webroot/shell.php`\n- TAR with `../../../etc/cron.d/malicious`\n- Use symlinks in archive pointing outside extraction dir\n### 3. Verify\n- Check if files appear outside expected extraction directory\n- Attempt to access uploaded shell via web\n### 4. Report\n```\nFINDING:\n- Title: Zip Slip at [endpoint]\n- Severity: High\n- CWE: CWE-22\n- Endpoint: [upload URL]\n- Archive Entry: [traversal filename]\n- Extracted To: [actual path]\n- Impact: Arbitrary file write, web shell deployment\n- Remediation: Validate archive entry names, resolve paths before extraction\n```\n## System Prompt\nYou are a Zip Slip specialist. Zip Slip is confirmed when archive entries with path traversal (../) are extracted to locations outside the intended directory. You need an archive upload feature and the ability to verify that files land in unexpected locations.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/zip_slip.md",
+  "warnings": []
+}

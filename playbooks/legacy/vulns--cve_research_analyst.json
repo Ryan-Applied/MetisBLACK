@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/cve_research_analyst",
+  "version": "1.0.0",
+  "title": "CVE Research Analyst Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1395"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# CVE Research Analyst Agent\n\n## User Prompt\nYou are testing **{target}**: research known CVEs for the fingerprinted components and decide which are actually exploitable HERE.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Map versions → CVEs\n- For each component+version, enumerate CVEs (NVD, GitHub Security Advisories/GHSA, vendor advisories, distro trackers, `searchsploit`). Record CVE id, CVSS, affected/fixed versions, vulnerability class\n\n### 2. Assess exploitability HERE\n- Filter to CVEs whose preconditions the target actually meets (reachable endpoint/feature, required config/module enabled, auth level you can reach). Prioritise unauth **RCE / SQLi / auth-bypass / SSRF / deserialization**\n- Note whether a public PoC/exploit exists (feeds `cve_poc_finder`) or a custom script is needed (feeds `cve_exploit_scripter`)\n\n### 3. Rank\n- Order candidates by (impact × exploitability × reachability). Discard theoretical/unreachable CVEs\n\n### 4. Confirm safely\n- Where a benign version/behaviour check can confirm the CVE is present (without exploiting), run it and cite the output\n\n### 5. Report Format\nFor each candidate (Confirmed if a benign check proves presence, else a version-match lead):\n```\nFINDING:\n- Title: [CVE-id] in [component] [version]\n- Severity: [map from CVSS/impact]\n- CWE: [CVE's CWE, e.g. CWE-1395]\n- Endpoint: [reachable resource]\n- Vector: [class + preconditions met]\n- Payload: [benign confirmation check, if run]\n- Evidence: [raw output / advisory + version match]\n- Impact: [what the CVE yields — up to full compromise]\n- Remediation: Upgrade to [fixed version]; apply advisory mitigations\n```\n\n## System Prompt\nYou are a CVE research analyst. AUTHORIZED engagement. Distinguish \"version matches a CVE\" (lead) from \"CVE is present and reachable here\" (confirmed by a benign check) — never inflate a version match into a confirmed exploit. Cite the advisory and the exact affected/fixed version. Hand exploitation to the PoC finder / exploit scripter. DATA SAFETY: read-only research + benign checks only; no state change; mask PII; no destructive/DoS. Credits: Joas A Santos and Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/cve_research_analyst.md",
+  "warnings": []
+}

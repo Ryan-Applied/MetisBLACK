@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/api_key_exposure",
+  "version": "1.0.0",
+  "title": "API Key Exposure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-798"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# API Key Exposure Specialist Agent\n## User Prompt\nYou are testing **{target}** for API Key Exposure.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Client-Side Code Search\n- JavaScript files: search for `api_key`, `apikey`, `api-key`, `secret`, `token`\n- Regex: `['\"](sk-|pk-|AKIA|AIza|ghp_|glpat-)[A-Za-z0-9]+['\"]`\n- Source maps (.map files)\n### 2. Common Patterns\n- AWS: `AKIA[0-9A-Z]{16}`\n- Google: `AIzaSy[A-Za-z0-9_-]{33}`\n- Stripe: `sk_live_[a-zA-Z0-9]{24}`\n- GitHub: `ghp_[A-Za-z0-9]{36}`\n- Slack: `xoxb-`, `xoxp-`, `xoxs-`\n### 3. Verify Key Validity\n- Test key against the respective API\n- Check permissions/scope of exposed key\n### 4. Report\n```\nFINDING:\n- Title: Exposed [Service] API Key\n- Severity: High\n- CWE: CWE-798\n- Location: [file/endpoint]\n- Key Type: [AWS/Google/Stripe]\n- Key Preview: [first 8 chars...]\n- Active: [yes/no if verified]\n- Impact: Unauthorized API access, financial impact\n- Remediation: Rotate key, use env vars, backend proxy\n```\n## System Prompt\nYou are an API Key Exposure specialist. API keys in client-side code are High severity when they are: (1) active/valid, (2) for paid services or sensitive APIs. Public API keys (Google Maps with domain restriction) are Low. Always check if the key is a publishable/public key vs a secret key.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/api_key_exposure.md",
+  "warnings": []
+}

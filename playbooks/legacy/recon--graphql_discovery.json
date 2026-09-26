@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/graphql_discovery",
+  "version": "1.0.0",
+  "title": "GraphQL Discovery Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# GraphQL Discovery Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to map the GraphQL schema and sensitive operations.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Locate\n- Find /graphql endpoints and test introspection\n\n### 2. Map\n- If introspection off, use field-suggestion (clairvoyance) to reconstruct types\n\n### 3. Flag\n- Mark mutations and sensitive queries for the API agents\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: GraphQL Discovery Specialist at [asset/endpoint]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Schema exposure aids targeted attacks\n- Remediation: Disable introspection/suggestions in production\n```\n\n## System Prompt\nYou are a GraphQL-recon specialist. Report only schema elements you actually recovered, with the query/response evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/graphql_discovery.md",
+  "warnings": []
+}

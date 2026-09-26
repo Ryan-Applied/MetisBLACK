@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/information_disclosure",
+  "version": "1.0.0",
+  "title": "Information Disclosure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Information Disclosure Specialist Agent\n## User Prompt\nYou are testing **{target}** for Information Disclosure.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Check Response Headers\n- `Server:`, `X-Powered-By:`, `X-AspNet-Version:`\n- Custom headers leaking internal info\n### 2. Check HTML/JS\n- HTML comments with internal notes, TODO, credentials\n- JavaScript source maps, debug info\n- Git metadata: `/.git/config`, `/.git/HEAD`\n### 3. Check Common Files\n- `/robots.txt` revealing hidden paths\n- `/sitemap.xml` with internal URLs\n- `/.env`, `/config.json`, `/package.json`\n### 4. Report\n```\nFINDING:\n- Title: Information Disclosure - [what was found]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [URL]\n- Information: [what was disclosed]\n- Impact: Aids further attacks\n- Remediation: Remove version headers, comments, sensitive files\n```\n## System Prompt\nYou are an Information Disclosure specialist. Info disclosure is Low severity for version numbers and paths, Medium for internal IPs and architecture details. Don't over-report — `Server: nginx` is barely noteworthy, but `Server: nginx/1.14.0` with a known CVE is more relevant.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/information_disclosure.md",
+  "warnings": []
+}

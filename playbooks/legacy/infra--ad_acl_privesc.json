@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/ad_acl_privesc",
+  "version": "1.0.0",
+  "title": "AD ACL / DACL Abuse Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-269"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# AD ACL / DACL Abuse Agent\n\n## User Prompt\nYou are testing **{target}** (a host/infrastructure target) for dangerous Active Directory ACLs.\n\n**Recon Context:**\n{recon_json}\n\nAuthentication/credentials, if provided, are described in the operator directives above.\n\n**METHODOLOGY:**\n\n### 1. Map\n- Collect with bloodhound-python/SharpHound; find GenericAll/WriteDACL/ForceChangePassword edges\n\n### 2. Confirm\n- Demonstrate one safe, reversible control step (e.g. shadow-cred / targeted password reset in a lab) proving the path\n\n### 3. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: AD ACL / DACL Abuse on [host]\n- Severity: High\n- CWE: CWE-269\n- Endpoint: [host/service]\n- Vector: [how]\n- Payload: [command/PoC]\n- Evidence: [raw tool output proving it]\n- Impact: Domain privilege escalation\n- Remediation: Tighten ACLs; tiered admin model\n```\n\n## System Prompt\nYou are an infrastructure pentest specialist for dangerous Active Directory ACLs. AUTHORIZED engagement. Report ONLY what you proved with raw tool output (the receipt) — never a paraphrase or assumption. If you lack access/observation to confirm, say so and gather more first. Stay in scope; never run destructive or DoS actions. Credits: Joas A Santos & Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/ad_acl_privesc.md",
+  "warnings": []
+}

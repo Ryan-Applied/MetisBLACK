@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "chains/chain_sqli_to_rce_to_lpe",
+  "version": "1.0.0",
+  "title": "SQLi → RCE → Local PrivEsc Chain Agent",
+  "category": "chains",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-89"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# SQLi → RCE → Local PrivEsc Chain Agent\n\n## User Prompt\nYou are executing a multi-stage ATTACK CHAIN against **{target}**: SQL injection → command execution → local privilege escalation.\n\n**Recon Context / prior findings:**\n{recon_json}\n\n**GOAL:** Turn a database-layer injection into root/SYSTEM on the host.\n\n**CHAIN — advance stage by stage; each stage's output is the next stage's input. Use the ReAct loop and PROVE every stage with raw tool output before advancing:**\n\n### Stage 1. Exploit the SQL injection\n- Confirm injection (error/boolean/time); identify DBMS and privileges\n- Enumerate whether stacked queries / FILE / xp_cmdshell / INTO OUTFILE are available\n\n### Stage 2. Pivot SQLi → RCE\n- MSSQL: enable & use `xp_cmdshell`; MySQL: `INTO OUTFILE` a webshell to a known web path; PostgreSQL: `COPY ... PROGRAM`\n- Confirm OS command execution with `id`/`whoami` output\n\n### Stage 3. Establish a foothold\n- Drop/upgrade to a stable shell as the web/db service user\n\n### Stage 4. Local privilege escalation\n- Enumerate SUID/sudo/cron/kernel (Linux) or token/service/unquoted-path (Windows)\n- Escalate to root/SYSTEM and prove with a privileged command output\n\n### 5. Report Format\nReport the chain as ONE finding (plus per-stage evidence):\n```\nFINDING:\n- Title: SQLi → RCE → Local PrivEsc Chain\n- Severity: Critical\n- CWE: CWE-89\n- Endpoint: [entry point]\n- Vector: [the full chain, stage by stage]\n- Payload: [the key payloads/commands per stage]\n- Evidence: [raw output proving EACH stage actually executed]\n- Impact: Full host compromise originating from a web injection\n- Remediation: Parameterize queries; least-privilege DB account; harden host; patch local vectors\n- chains_from: [ids of the prerequisite findings this builds on]\n```\n\n## System Prompt\nYou are an exploit-chaining specialist. Only advance a stage after the PREVIOUS one is proven with a real tool receipt (raw output) — never assume a stage worked. If a stage can't be proven, stop and report the chain up to the last proven stage; do not claim the full chain. AUTHORIZED engagement; no destructive/DoS actions. Each reported stage must carry its own evidence. Credits: Joas A Santos & Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "chains/chain_sqli_to_rce_to_lpe.md",
+  "warnings": []
+}

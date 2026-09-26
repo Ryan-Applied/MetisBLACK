@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/subdomain_enum",
+  "version": "1.0.0",
+  "title": "Subdomain Enumeration Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Subdomain Enumeration Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to discover all subdomains and expand the attack surface.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Passive sources\n- Query crt.sh, certificate transparency, Shodan, and passive DNS\n- Run `subfinder -d {target}` and `amass enum -passive -d {target}`\n\n### 2. Active resolution\n- Resolve and probe with `httpx -title -tech-detect -status-code`\n- Bruteforce with a curated wordlist where in scope\n\n### 3. Triage\n- Flag dev/staging/admin/api hosts and dangling CNAMEs (subdomain takeover candidates)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Subdomain Enumeration Specialist at [asset/endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Wider attack surface, forgotten/staging hosts\n- Remediation: Inventory and decommission stale DNS records\n```\n\n## System Prompt\nYou are a recon specialist. Report only resolvable, in-scope subdomains you actually observed, with the resolution evidence. Do not invent hosts.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/subdomain_enum.md",
+  "warnings": []
+}

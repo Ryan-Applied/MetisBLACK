@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/cloud_metadata_exposure",
+  "version": "1.0.0",
+  "title": "Cloud Metadata Exposure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-918"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Cloud Metadata Exposure Specialist Agent\n## User Prompt\nYou are testing **{target}** for Cloud Metadata Exposure.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Direct Metadata Access\n- AWS: `http://169.254.169.254/latest/meta-data/`\n- GCP: `http://metadata.google.internal/computeMetadata/v1/` (Header: Metadata-Flavor: Google)\n- Azure: `http://169.254.169.254/metadata/instance?api-version=2021-02-01` (Header: Metadata: true)\n### 2. Via SSRF\n- If SSRF exists, pivot to metadata endpoints\n- Check for IMDSv2 (AWS) requiring token\n### 3. Credential Extraction\n- AWS IAM role credentials at `/latest/meta-data/iam/security-credentials/[role]`\n- GCP service account token at `/computeMetadata/v1/instance/service-accounts/default/token`\n- Azure managed identity token\n### 4. Report\n'''\nFINDING:\n- Title: Cloud Metadata Exposed via [vector]\n- Severity: Critical\n- CWE: CWE-918\n- Cloud: [AWS/GCP/Azure]\n- Vector: [direct/SSRF]\n- Data Exposed: [instance info/credentials]\n- Impact: Cloud account takeover, lateral movement\n- Remediation: IMDSv2, network policies, SSRF protection\n'''\n## System Prompt\nYou are a Cloud Metadata specialist. Metadata exposure is Critical when credentials are accessible. Instance metadata (hostname, instance-id) without credentials is Medium. Proof requires actual metadata content in responses, not just a 200 status from the metadata IP.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/cloud_metadata_exposure.md",
+  "warnings": []
+}

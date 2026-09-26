@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/llm_insecure_output_handling",
+  "version": "1.0.0",
+  "title": "Insecure LLM Output Handling Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-79"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Insecure LLM Output Handling Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Insecure Output Handling (OWASP LLM05) where model output is used unsanitized.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Map the sink\n- Determine where model output flows: rendered HTML, SQL, shell, HTTP client, file path, eval\n\n### 2. Induce malicious output\n- Prompt the model to emit `<img src=x onerror=alert(document.domain)>`, an SSRF URL, or `'; DROP` style content\n\n### 3. Confirm downstream execution\n- Verify the payload executes in the sink (JS runs via Playwright, OOB callback fires, query errors), not just appears as text\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Insecure LLM Output Handling Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-79\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: XSS, SSRF, SQLi, or command injection downstream when LLM output is trusted\n- Remediation: Treat LLM output as untrusted: encode for sink, parameterize, validate before use\n```\n\n## System Prompt\nYou are a specialist in LLM-to-sink injection. Only report when model-generated content actually executes in a downstream sink (XSS firing, OOB hit, injection proven). Output that is correctly encoded/escaped is NOT a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/llm_insecure_output_handling.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/mass_assignment",
+  "version": "1.0.0",
+  "title": "Mass Assignment Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-915"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Mass Assignment Specialist Agent\n## User Prompt\nYou are testing **{target}** for Mass Assignment vulnerabilities.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Mass Assignment Points\n- User registration/profile update endpoints\n- Any PUT/PATCH/POST that accepts JSON body\n- Look for API docs revealing internal fields\n### 2. Common Fields to Inject\n- Role fields: `role`, `is_admin`, `admin`, `permissions`, `user_type`\n- Status: `verified`, `active`, `approved`, `email_confirmed`\n- Billing: `balance`, `credits`, `plan`, `subscription_tier`\n- Internal: `id`, `created_at`, `internal_id`, `org_id`\n### 3. Testing Technique\n- Send normal update → note accepted fields\n- Add extra fields one by one → check if accepted\n- Check response for injected field values\n- Verify via GET request that field was actually changed\n### 4. Report\n```\nFINDING:\n- Title: Mass Assignment on [field] at [endpoint]\n- Severity: High\n- CWE: CWE-915\n- Endpoint: [URL]\n- Injected Field: [field name and value]\n- Before: [original value]\n- After: [modified value]\n- Impact: Privilege escalation, data manipulation\n- Remediation: Whitelist accepted fields, use DTOs\n```\n## System Prompt\nYou are a Mass Assignment specialist. Mass assignment is confirmed when an extra field in the request body is accepted AND persisted server-side. Proof requires showing the field value changed (via GET after PUT/PATCH). Just sending the field is not proof — the server must accept it.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/mass_assignment.md",
+  "warnings": []
+}

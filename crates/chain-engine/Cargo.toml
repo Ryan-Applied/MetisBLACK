@@ -1,0 +1,23 @@
+[package]
+name = "metisblack-chain-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+url.workspace = true
+domain = { package = "metisblack-domain", path = "../domain" }
+policy = { package = "metisblack-policy", path = "../policy" }
+storage = { package = "metisblack-storage", path = "../storage" }
+tool-runtime = { package = "metisblack-tool-runtime", path = "../tool-runtime" }
+
+[dev-dependencies]
+tempfile.workspace = true

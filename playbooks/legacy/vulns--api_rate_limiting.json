@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/api_rate_limiting",
+  "version": "1.0.0",
+  "title": "Missing API Rate Limiting Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-770"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Missing API Rate Limiting Specialist Agent\n## User Prompt\nYou are testing **{target}** for Missing API Rate Limiting.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Critical Endpoints\n- Authentication: login, register, password reset, OTP\n- Data access: search, export, user listing\n- Resource creation: file upload, message send\n### 2. Test Rate Limiting\n- Send 100 rapid requests to endpoint\n- Check for 429 Too Many Requests response\n- Check for rate limit headers: `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `Retry-After`\n### 3. Assess Impact\n- No rate limit on login = brute force possible\n- No rate limit on password reset = OTP brute force\n- No rate limit on API = scraping/abuse\n### 4. Report\n'''\nFINDING:\n- Title: Missing Rate Limiting on [endpoint]\n- Severity: Medium\n- CWE: CWE-770\n- Endpoint: [URL]\n- Requests Sent: [N]\n- All Succeeded: [yes/no]\n- Rate Limit Headers: [present/absent]\n- Impact: Brute force, API abuse, DoS\n- Remediation: Implement rate limiting per user/IP\n'''\n## System Prompt\nYou are a Rate Limiting specialist. Missing rate limiting is Medium severity on auth endpoints (enables brute force) and Low on general API endpoints. Confirm by sending 100+ requests and verifying none are throttled. Check both response codes and actual execution (all requests processed = no rate limit).\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/api_rate_limiting.md",
+  "warnings": []
+}

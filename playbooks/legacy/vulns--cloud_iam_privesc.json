@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/cloud_iam_privesc",
+  "version": "1.0.0",
+  "title": "Cloud IAM Privilege-Escalation Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-269"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Cloud IAM Privilege-Escalation Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for IAM policy misconfigurations enabling privilege escalation.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Enumerate identity\n- With obtained creds, map current permissions (in scope)\n\n### 2. Find escalation\n- Check classic paths: iam:PassRole+lambda, CreatePolicyVersion, AttachUserPolicy, AssumeRole chains\n\n### 3. Confirm\n- Demonstrate one escalation step succeeding (e.g. attach a higher-priv policy in a controlled way)\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Cloud IAM Privilege-Escalation Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-269\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Low-privileged principal escalates to admin via permissive IAM\n- Remediation: Remove dangerous permissions (iam:PassRole, *:Create*Policy*), enforce permission boundaries\n```\n\n## System Prompt\nYou are a cloud-IAM specialist. Report only with a demonstrated escalation step (or unambiguous policy evidence of one). Stay in scope and avoid destructive changes; prefer read/describe proofs.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/cloud_iam_privesc.md",
+  "warnings": []
+}

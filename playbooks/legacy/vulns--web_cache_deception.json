@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/web_cache_deception",
+  "version": "1.0.0",
+  "title": "Web Cache Deception Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-525"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Web Cache Deception Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Web cache deception exposing authenticated content.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Find cacheable trick paths\n- Append `/nonexistent.css` or `;.css`/`%2e%2ecss` to authed pages\n\n### 2. Prime cache\n- As victim (or via shared cache), request the trick URL so it caches the authed body\n\n### 3. Confirm\n- As attacker, fetch the same URL and retrieve the victim's private content from cache\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Web Cache Deception Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-525\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Caching of victims' private pages served to attackers\n- Remediation: Cache by content-type rules, don't cache authed responses, validate path/extension\n```\n\n## System Prompt\nYou are a cache-deception specialist. Report only when an attacker retrieves another user's private content from cache, evidenced. Cache headers alone are not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/web_cache_deception.md",
+  "warnings": []
+}

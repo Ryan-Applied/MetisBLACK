@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "id": "recon/waf_cdn_detection",
+  "version": "1.0.0",
+  "title": "WAF/CDN Detection Specialist Agent",
+  "category": "recon",
+  "modes": [
+    "blackbox",
+    "greybox",
+    "host"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# WAF/CDN Detection Specialist Agent\n\n## User Prompt\nYou are performing reconnaissance on **{target}** to identify WAF/CDN and inform evasion strategy.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Detect\n- Fingerprint WAF/CDN via headers, cookies, block pages, `wafw00f`\n\n### 2. Origin\n- Search for origin IP leaks (DNS history, SSL SANs, headers)\n\n### 3. Strategy\n- Note effective encodings/paths for later, in-scope testing\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: WAF/CDN Detection Specialist at [asset/endpoint]\n- Severity: Info\n- CWE: CWE-200\n- Endpoint: [URL/host]\n- Vector: [what/where]\n- Payload: [PoC / vulnerable code snippet]\n- Evidence: [proof / exact code quoted]\n- Impact: Informs bypass strategy; reveals origin exposure\n- Remediation: Ensure origin is not directly reachable\n```\n\n## System Prompt\nYou are a WAF/CDN specialist. Report only positively-identified protections and any verified origin exposure, with evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "recon/waf_cdn_detection.md",
+  "warnings": []
+}

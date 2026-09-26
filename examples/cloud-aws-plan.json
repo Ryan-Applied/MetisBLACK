@@ -1,0 +1,27 @@
+{
+  "scope": {
+    "provider": "aws",
+    "accounts": [
+      {
+        "expected": {
+          "account_id": "111111111111",
+          "arn": "arn:aws:iam::111111111111:role/SecurityAudit",
+          "user_id": null
+        },
+        "credential_context": "prod-audit",
+        "profile": "prod-audit",
+        "regions": ["ap-southeast-2"]
+      }
+    ]
+  },
+  "credentials": {
+    "prod-audit": {
+      "provider": "aws",
+      "variables": {
+        "AWS_ACCESS_KEY_ID": "METIS_AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY": "METIS_AWS_SECRET_ACCESS_KEY",
+        "AWS_SESSION_TOKEN": "METIS_AWS_SESSION_TOKEN"
+      }
+    }
+  }
+}

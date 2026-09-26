@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "infra/windows_winrm_access",
+  "version": "1.0.0",
+  "title": "WinRM Authenticated Access Agent",
+  "category": "infra",
+  "modes": [
+    "host",
+    "cloud"
+  ],
+  "cwe": [
+    "CWE-287"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# WinRM Authenticated Access Agent\n\n## User Prompt\nYou are testing **{target}** (a host/infrastructure target) for remote management access via WinRM.\n\n**Recon Context:**\n{recon_json}\n\nAuthentication/credentials, if provided, are described in the operator directives above.\n\n**METHODOLOGY:**\n\n### 1. Connect\n- `evil-winrm -i {target} -u <user> -p <pass>` (or -H <hash>) with supplied creds/hash\n\n### 2. Confirm\n- Show an authenticated remote shell and the host context (`whoami`, hostname)\n\n### 3. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: WinRM Authenticated Access on [host]\n- Severity: Medium\n- CWE: CWE-287\n- Endpoint: [host/service]\n- Vector: [how]\n- Payload: [command/PoC]\n- Evidence: [raw tool output proving it]\n- Impact: Remote host control\n- Remediation: Restrict WinRM; strong creds; network segmentation\n```\n\n## System Prompt\nYou are an infrastructure pentest specialist for remote management access via WinRM. AUTHORIZED engagement. Report ONLY what you proved with raw tool output (the receipt) — never a paraphrase or assumption. If you lack access/observation to confirm, say so and gather more first. Stay in scope; never run destructive or DoS actions. Credits: Joas A Santos & Red Team Leaders.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "infra/windows_winrm_access.md",
+  "warnings": []
+}

@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/container_escape_advanced",
+  "version": "1.0.0",
+  "title": "Container Escape Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-269"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# Container Escape Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Container breakout via privileged config, capabilities, or host mounts.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Assess container\n- Check capabilities (`capsh --print`), `/proc/1/cgroup`, mounts, `/var/run/docker.sock`, privileged flag\n\n### 2. Pick technique\n- cgroups release_agent (privileged), CAP_SYS_ADMIN mount, docker.sock, hostPath mounts, core_pattern\n\n### 3. Confirm\n- Read or write a host-only file (e.g. `/host/etc/shadow`) or get host command execution as evidence\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Container Escape Specialist at [endpoint]\n- Severity: Critical\n- CWE: CWE-269\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Escape to the host node and lateral movement\n- Remediation: Drop CAP_SYS_ADMIN, no --privileged, read-only host mounts, seccomp/AppArmor, userns\n```\n\n## System Prompt\nYou are a container-escape specialist. Report only when you achieve a verified action on the host (file read/write or exec) — not the mere presence of a capability. Provide the host evidence.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/container_escape_advanced.md",
+  "warnings": []
+}

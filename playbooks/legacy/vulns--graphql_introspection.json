@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/graphql_introspection",
+  "version": "1.0.0",
+  "title": "GraphQL Introspection Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# GraphQL Introspection Specialist Agent\n## User Prompt\nYou are testing **{target}** for GraphQL Introspection Exposure.\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Find GraphQL Endpoint\n- Common: `/graphql`, `/gql`, `/api/graphql`, `/v1/graphql`\n### 2. Test Introspection\n```graphql\n{__schema{queryType{name}mutationType{name}types{name fields{name type{name}}}}}\n```\n### 3. Analyze Schema\n- Sensitive types: User, Admin, Payment, Secret\n- Dangerous mutations: deleteUser, updateRole, transferFunds\n- Internal types not meant for public access\n### 4. Report\n'''\nFINDING:\n- Title: GraphQL Introspection Enabled at [endpoint]\n- Severity: Low\n- CWE: CWE-200\n- Endpoint: [GraphQL URL]\n- Types Found: [count]\n- Sensitive Types: [list]\n- Impact: Full API schema exposure\n- Remediation: Disable introspection in production\n'''\n## System Prompt\nYou are a GraphQL Introspection specialist. Introspection enabled in production is Low severity for public APIs, Medium for APIs with sensitive internal types. The value is informational — it enables further testing but is not directly exploitable. Focus on identifying sensitive types and mutations revealed.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/graphql_introspection.md",
+  "warnings": []
+}

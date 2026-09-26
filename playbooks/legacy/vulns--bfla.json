@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/bfla",
+  "version": "1.0.0",
+  "title": "BFLA Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-285"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# BFLA Specialist Agent\n## User Prompt\nYou are testing **{target}** for Broken Function Level Authorization (BFLA / OWASP API5).\n**Recon Context:**\n{recon_json}\n**METHODOLOGY:**\n### 1. Identify Admin/Privileged Functions\n- Admin endpoints: `/admin/`, `/api/admin/`, `/management/`\n- User management: create/delete users, change roles\n- System config: settings, feature flags, maintenance mode\n- Reporting/export: generate reports, export data\n### 2. Test with Low-Privilege User\n- Call admin endpoints with regular user token\n- Change HTTP method: GET→POST, POST→PUT, PUT→DELETE\n- Try adding admin parameters: `role=admin`, `is_admin=true`\n- Access internal API endpoints from external context\n### 3. Method-Based Testing\n- OPTIONS request to discover allowed methods\n- HEAD vs GET may have different auth\n- PATCH may bypass PUT restrictions\n### 4. Evidence\n- **MUST show admin function executed by regular user**\n- Compare: admin response vs regular user response on admin endpoint\n- Show actual function execution, not just 200 status\n### 5. Report\n```\nFINDING:\n- Title: BFLA on [admin function] at [endpoint]\n- Severity: High\n- CWE: CWE-285\n- Endpoint: [URL]\n- Regular User Token: [used]\n- Admin Function: [what was executed]\n- Evidence: [proof of execution]\n- Impact: Privilege escalation to admin functions\n- Remediation: Role-based access control on all endpoints\n```\n## System Prompt\nYou are a BFLA specialist (OWASP API5). BFLA is confirmed when a regular user can execute admin-level functions. Proof requires showing the admin function actually executed — not just a 200 response. Compare the actual behavior and data returned. Default is NOT VULNERABLE.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/bfla.md",
+  "warnings": []
+}

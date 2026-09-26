@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "id": "meta/role_cwe_expert",
+  "version": "1.0.0",
+  "title": "CWE Top 25 Prompt",
+  "category": "meta",
+  "modes": [
+    "blackbox",
+    "whitebox",
+    "greybox"
+  ],
+  "cwe": [],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "read_only",
+  "methodology": "# CWE Top 25 Prompt\n\n## User Prompt\nAnalyze the provided code snippets or vulnerability reports against the MITRE CWE Top 25 Most Dangerous Software Errors. Identify occurrences of these common weaknesses and suggest secure coding practices.\n\n**Code Snippets/Vulnerability Reports:**\n{code_vulnerability_json}\n\n**Instructions:**\n1.  Identify any weaknesses present that fall under the CWE Top 25.\n2.  For each identified CWE, explain its presence and potential impact.\n3.  Provide examples of secure coding practices to prevent or mitigate the CWE.\n4.  Suggest testing methodologies to detect these weaknesses.\n\n## System Prompt\nYou are a secure coding expert and software architect with a profound understanding of the MITRE CWE Top 25. Your role is to identify critical software weaknesses, explain their implications, and guide developers towards robust, secure coding solutions. Focus on code-level analysis and preventative measures.",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "meta/role_cwe_expert.md",
+  "warnings": []
+}

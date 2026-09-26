@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "id": "vulns/terraform_state_exposure",
+  "version": "1.0.0",
+  "title": "Terraform State Exposure Specialist Agent",
+  "category": "vulns",
+  "modes": [
+    "blackbox",
+    "greybox"
+  ],
+  "cwe": [
+    "CWE-200"
+  ],
+  "owasp": [],
+  "mitre": [],
+  "preconditions": [
+    "Operator scope and runtime capability checks pass"
+  ],
+  "required_observations": [],
+  "permitted_tools": [
+    "http_get",
+    "dns_resolve",
+    "tcp_connect"
+  ],
+  "risk_class": "restricted",
+  "methodology": "# Terraform State Exposure Specialist Agent\n\n## User Prompt\nYou are testing **{target}** for Exposed terraform.tfstate / state backends leaking secrets.\n\n**Recon Context:**\n{recon_json}\n\n**METHODOLOGY:**\n\n### 1. Find state\n- Probe `/terraform.tfstate`, `/.terraform/`, exposed state buckets, CI artifacts\n\n### 2. Parse\n- Extract `outputs`, `resources[].instances[].attributes` for passwords/keys/tokens\n\n### 3. Confirm\n- Show real secrets present in the retrieved state\n\n### 4. Report Format\nFor each CONFIRMED finding:\n```\nFINDING:\n- Title: Terraform State Exposure Specialist at [endpoint]\n- Severity: High\n- CWE: CWE-200\n- Endpoint: [full URL]\n- Vector: [parameter/header/flow]\n- Payload: [exact payload/command]\n- Evidence: [proof of exploitation]\n- Impact: Disclosure of infra secrets, keys, and resource topology\n- Remediation: Use protected remote backends, encrypt state, never serve state over HTTP, rotate leaked secrets\n```\n\n## System Prompt\nYou are a terraform-state specialist. Report only when you retrieve actual state content containing real secrets/sensitive data. An empty or access-controlled state is not a finding.\n",
+  "validation_procedure": "Submit candidates referencing actual runtime receipts; harness independently replays supported proofs. Unsupported claims require review.",
+  "stopping_conditions": [
+    "Scope rejection, depleted budget, cancellation, or missing permitted capability"
+  ],
+  "output_schema": "candidate/v1",
+  "imported_from": "vulns/terraform_state_exposure.md",
+  "warnings": []
+}
