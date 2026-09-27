@@ -1,4 +1,10 @@
 //! Shared application service: CLI, REPL and TUI invoke the same engine.
+mod full_engagement;
+
+pub use full_engagement::{
+    EngagementEngine, StageAttemptToken, StageRuntime, StageTerminalOutcome,
+};
+
 use anyhow::{ensure, Context, Result};
 use api_validation::{
     classify_response, materialize_request_url, normalize_openapi, violation_hash,

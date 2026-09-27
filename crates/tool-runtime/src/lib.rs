@@ -13,17 +13,157 @@ use std::{
     collections::BTreeMap,
     net::SocketAddr,
     sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc,
+        atomic::{AtomicBool, AtomicU32, Ordering},
+        Arc, Mutex as StdMutex,
     },
     time::Duration,
 };
 use storage::{hash, Redactor};
 use tokio::{
     io::AsyncReadExt,
-    sync::{Mutex, Semaphore},
+    sync::{Mutex, OwnedSemaphorePermit, Semaphore},
     time::{sleep, timeout, Instant},
 };
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ExecutionBudgetUsage {
+    pub requests: u64,
+    pub state_changes: u64,
+    pub accounts: u64,
+    pub peak_concurrency: u32,
+}
+
+struct ExecutionBudgetInner {
+    max_requests: u64,
+    max_state_changes: u64,
+    max_accounts: u64,
+    usage: StdMutex<ExecutionBudgetUsage>,
+    active: AtomicBool,
+    in_flight: AtomicU32,
+    permits: Arc<Semaphore>,
+}
+
+/// One in-memory authority and exact live I/O ledger for a scheduler attempt.
+/// Clones share counters and invalidation state. The scheduler deliberately
+/// does not reconstruct this value after a crash, so an outcome-unknown stage
+/// cannot regain execution authority by rebuilding public identifiers.
+#[derive(Clone)]
+pub struct ExecutionBudget {
+    inner: Arc<ExecutionBudgetInner>,
+}
+
+impl ExecutionBudget {
+    pub fn new(
+        max_requests: u64,
+        max_state_changes: u64,
+        max_accounts: u64,
+        max_concurrency: u32,
+    ) -> Result<Self> {
+        ensure!(
+            max_concurrency > 0,
+            "execution concurrency cap must be positive"
+        );
+        Ok(Self {
+            inner: Arc::new(ExecutionBudgetInner {
+                max_requests,
+                max_state_changes,
+                max_accounts,
+                usage: StdMutex::new(ExecutionBudgetUsage::default()),
+                active: AtomicBool::new(true),
+                in_flight: AtomicU32::new(0),
+                permits: Arc::new(Semaphore::new(usize::try_from(max_concurrency)?)),
+            }),
+        })
+    }
+
+    pub fn usage(&self) -> Result<ExecutionBudgetUsage> {
+        self.inner
+            .usage
+            .lock()
+            .map(|usage| *usage)
+            .map_err(|_| anyhow!("execution budget lock failed"))
+    }
+
+    pub fn deactivate(&self) {
+        self.inner.active.store(false, Ordering::SeqCst);
+    }
+
+    fn ensure_active(&self) -> Result<()> {
+        ensure!(
+            self.inner.active.load(Ordering::SeqCst),
+            "stage attempt execution authority is no longer active"
+        );
+        Ok(())
+    }
+
+    fn reserve(&self, policy: &Policy, state_change: bool, account: bool) -> Result<()> {
+        self.ensure_active()?;
+        let mut usage = self
+            .inner
+            .usage
+            .lock()
+            .map_err(|_| anyhow!("execution budget lock failed"))?;
+        ensure!(
+            policy.bypasses(Control::RequestBudget) || usage.requests < self.inner.max_requests,
+            "stage request budget exhausted"
+        );
+        if state_change || account {
+            ensure!(
+                policy.bypasses(Control::StateChanges)
+                    || usage.state_changes < self.inner.max_state_changes,
+                "stage state-change budget exhausted"
+            );
+        }
+        if account {
+            ensure!(
+                policy.bypasses(Control::AccountBudget) || usage.accounts < self.inner.max_accounts,
+                "stage account budget exhausted"
+            );
+        }
+        policy.reserve(state_change, account)?;
+        usage.requests = usage.requests.saturating_add(1);
+        if state_change || account {
+            usage.state_changes = usage.state_changes.saturating_add(1);
+        }
+        if account {
+            usage.accounts = usage.accounts.saturating_add(1);
+        }
+        Ok(())
+    }
+
+    async fn enter(&self, bypass: bool) -> Result<ExecutionBudgetPermit> {
+        self.ensure_active()?;
+        let permit = if bypass {
+            None
+        } else {
+            Some(self.inner.permits.clone().acquire_owned().await?)
+        };
+        self.ensure_active()?;
+        let in_flight = self.inner.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut usage = self
+            .inner
+            .usage
+            .lock()
+            .map_err(|_| anyhow!("execution budget lock failed"))?;
+        usage.peak_concurrency = usage.peak_concurrency.max(in_flight);
+        drop(usage);
+        Ok(ExecutionBudgetPermit {
+            budget: self.clone(),
+            _permit: permit,
+        })
+    }
+}
+
+struct ExecutionBudgetPermit {
+    budget: ExecutionBudget,
+    _permit: Option<OwnedSemaphorePermit>,
+}
+
+impl Drop for ExecutionBudgetPermit {
+    fn drop(&mut self) {
+        self.budget.inner.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
 
 fn normalize_media_type(raw: &str) -> Option<String> {
     let media_type = raw.split(';').next()?.trim().to_ascii_lowercase();
@@ -206,6 +346,7 @@ pub struct Runtime {
     journal: Option<std::path::PathBuf>,
     journal_lock: Arc<Mutex<()>>,
     authorized: bool,
+    execution_budget: Option<ExecutionBudget>,
 }
 impl Runtime {
     pub fn new(policy: Policy, evidence: EvidenceStore, redactor: Redactor) -> Self {
@@ -221,7 +362,14 @@ impl Runtime {
             journal: None,
             journal_lock: Arc::new(Mutex::new(())),
             authorized: false,
+            execution_budget: None,
         }
+    }
+
+    pub fn with_execution_budget(&self, budget: ExecutionBudget) -> Self {
+        let mut runtime = self.clone();
+        runtime.execution_budget = Some(budget);
+        runtime
     }
     pub fn attach_vault(&mut self, path: &std::path::Path) -> Result<()> {
         self.vault = Some(Arc::new(storage::Vault::open(path)?));
@@ -252,10 +400,17 @@ impl Runtime {
     async fn slot(&self) -> Result<()> {
         self.slot_with_impact(false, false).await
     }
+    async fn reserve_impact(&self, state_change: bool, account: bool) -> Result<()> {
+        if let Some(budget) = &self.execution_budget {
+            budget.reserve(&self.policy, state_change, account)?;
+        } else {
+            self.policy.reserve(state_change, account)?;
+        }
+        self.persist_usage().await
+    }
     async fn slot_with_impact(&self, state_change: bool, account: bool) -> Result<()> {
         self.check_cancelled()?;
-        self.policy.reserve(state_change, account)?;
-        self.persist_usage().await?;
+        self.reserve_impact(state_change, account).await?;
         if self.policy.bypasses(Control::RateLimit) {
             return Ok(());
         }
@@ -270,6 +425,15 @@ impl Runtime {
     }
     pub async fn execute(&self, actor: &str, action: ToolAction) -> Result<Receipt> {
         self.check_cancelled()?;
+        let _stage_permit = if let Some(budget) = &self.execution_budget {
+            Some(
+                budget
+                    .enter(self.policy.bypasses(Control::Concurrency))
+                    .await?,
+            )
+        } else {
+            None
+        };
         let _permit = if self.policy.bypasses(Control::Concurrency) {
             None
         } else {
@@ -561,8 +725,7 @@ impl Runtime {
                 args,
                 working_dir,
             } => {
-                self.policy.reserve(true, false)?;
-                self.persist_usage().await?;
+                self.reserve_impact(true, false).await?;
                 let mut command = tokio::process::Command::new(program);
                 command
                     .args(args)
@@ -1164,6 +1327,32 @@ mod tests {
             .map(|port| SocketAddr::from(([192, 0, 2, 1], port)))
             .collect::<Vec<_>>();
         assert!(canonical_api_addresses(&oversized).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn attempt_budget_is_exact_invalidatable_and_explicitly_bypassable() -> Result<()> {
+        let policy = Policy::new(scope_for_url("https://example.test/")?)?;
+        let budget = ExecutionBudget::new(1, 0, 0, 1)?;
+        budget.reserve(&policy, false, false)?;
+        assert!(budget.reserve(&policy, false, false).is_err());
+        assert_eq!(budget.usage()?.requests, 1);
+        budget.deactivate();
+        assert!(budget.reserve(&policy, false, false).is_err());
+
+        let overrides = domain::ExpertOverrides {
+            controls: vec![Control::RequestBudget],
+            reason: "authorized high-volume fixture execution".into(),
+            actor: "fixture-operator".into(),
+            acknowledged: true,
+            ..domain::ExpertOverrides::default()
+        };
+        let bypass_policy =
+            Policy::with_overrides(scope_for_url("https://example.test/")?, overrides)?;
+        let bypassed = ExecutionBudget::new(0, 0, 0, 1)?;
+        bypassed.reserve(&bypass_policy, false, false)?;
+        bypassed.reserve(&bypass_policy, false, false)?;
+        assert_eq!(bypassed.usage()?.requests, 2);
         Ok(())
     }
     async fn serve(response: &'static str) -> Result<(String, tokio::task::JoinHandle<()>)> {

@@ -37,7 +37,7 @@ A capability is complete only when all applicable gates pass:
 | E07 | P0 | Attack-chain breadth | Verified primitive registry, evidence-backed dynamic DAGs, loot propagation, typed adapters and cleanup | In progress: E07-S01 now has checkpoint-scoped single-writer execution, durable primary/replay/cleanup intents, exact operation-bound receipt recovery, typed dispatch ambiguity, semantic replay, cleanup preflight and indeterminate quarantine; typed loot, dynamic materialization, full lifecycle retest/reporting and live-lab certification remain |
 | E08 | P1 | Provider and swarm platform | Subscription CLIs, provider breadth, streaming, reasoning controls, native cost telemetry, routing and durable workers | In progress: E08-S01 adds audited Claude/Codex subscription transports, explicit autonomous modes, durable pre-spawn intents, exact-receipt recovery and failure-closed panel integration; Gemini/Grok, streaming, durable distributed workers and broader telemetry remain |
 | E09 | P1 | SDLC integrations | Remote PR/MR fetch, private clone, reviews, status gates, branch watch, Jira issues and mention automation | Planned |
-| E10 | P1 | Operator experience and reports | Natural-language REPL, production TUI, project memory, proxies, targeted retest, PDF/Typst and evidence bundles | Planned |
+| E10 | P1 | Operator experience and reports | Natural-language REPL, production TUI, project memory, proxies, targeted retest, PDF/Typst and evidence bundles | In progress: E10-S01 now has strict engagement/stage/coverage/provider contracts plus a durable executable scheduler core: non-reconstructible stage capabilities, stage-scoped dispatch/budgets with audited bypasses, crash-to-indeterminate recovery, exact consumed retry authority, all-terminal cleanup, terminal outcomes, causal lineage and atomic coverage finalization. Adapter composition, frontier convergence, persistent browser/auth propagation, `full --plan`, live feed, coverage renderers/exit semantics, reporting/TUI integration and mixed-runtime fixtures remain |
 | E11 | P2 | Runtime and data hardening | OS sandbox, managed keys, evidence retention/deletion, stable configuration migrations and distributed execution | Planned |
 | E12 | P2 | Release engineering | Cross-platform CI, live-lab certification, signed artifacts, provenance, SBOMs and dependency automation | In progress: locked Linux/macOS/Windows CI and a verified local optimized build exist; live-lab certification, signing, published provenance/SBOMs and dependency automation remain |
 
@@ -75,7 +75,7 @@ reasoning controls and complete native cost telemetry remain open.
 
 ## Current verification baseline
 
-The current locked repository baseline is 331 passing non-ignored local tests.
+The current locked repository baseline is 363 passing non-ignored local tests.
 Two authenticated subscription probes are ignored by the fixture matrix and were
 run separately against Claude Code `2.1.283` and Codex CLI `0.147.0`; both passed
 in unrestricted mode with their exact dangerous flags. Formatting, all-target and

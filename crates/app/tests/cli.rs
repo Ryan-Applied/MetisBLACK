@@ -359,6 +359,25 @@ fn discovery_plan_is_wired_for_blackbox_and_greybox_only() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn tui_identifies_its_blackbox_only_coverage_profile() -> Result<()> {
+    let binary = env!("CARGO_BIN_EXE_metisblack");
+    let output = Command::new(binary)
+        .args(["tui", "https://example.test", "--dry-run", "--json"])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let config: Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(config["mode"], "blackbox");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("COVERAGE PROFILE: blackbox-only TUI"));
+    assert!(stderr.contains("not composed by this command"));
+    Ok(())
+}
+
 #[tokio::test]
 async fn saved_actions_display_effective_unsafe_banners() -> Result<()> {
     let binary = env!("CARGO_BIN_EXE_metisblack");

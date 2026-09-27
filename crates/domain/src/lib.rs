@@ -1,4 +1,8 @@
 //! Versioned contracts. Model candidates deliberately cannot set finding state.
+pub mod engagement;
+
+pub use engagement::*;
+
 use anyhow::{bail, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -112,7 +116,7 @@ impl Control {
         Self::Timeouts,
     ];
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ExpertOverrides {
     #[serde(default)]
@@ -203,7 +207,7 @@ fn root_paths() -> Vec<String> {
     vec!["/".into()]
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Scope {
     #[serde(default)]

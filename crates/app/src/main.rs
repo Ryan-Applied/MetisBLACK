@@ -186,6 +186,7 @@ enum Command {
         run_dir: PathBuf,
     },
     Demo,
+    /// Black-box-only TUI. This is not the multi-stage full-engagement profile.
     Tui {
         target: String,
     },
@@ -386,6 +387,11 @@ fn configure(cli: &Cli, mode: Mode, targets: Vec<String>) -> Result<RunConfig> {
 }
 async fn dispatch(cli: Cli) -> Result<i32> {
     let command = cli.command.as_ref().context("command required")?;
+    if matches!(command, Command::Tui { .. }) {
+        eprintln!(
+            "COVERAGE PROFILE: blackbox-only TUI — browser, authenticated, host, cloud, AI and source stages are not composed by this command"
+        );
+    }
     match command {
         Command::Models => {
             println!(
