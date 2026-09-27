@@ -99,11 +99,10 @@ separately against Claude Code `2.1.283` and Codex CLI `0.147.0`, both passing i
 unrestricted mode with their exact dangerous flags. Local formatting, all-target
 checking and strict Clippy also pass. `cargo deny` is not installed on this host,
 so dependency-policy verification remains a CI gate. GitHub Actions run
-[`36280705930`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36280705930)
-passes baseline commit `4ffe599`, including the strict quality and
+[`36283953344`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36283953344)
+passes E10 scheduler commit `d2b4dec`, including the strict quality and
 dependency-policy jobs and locked Rust 1.88 tests on Ubuntu, macOS 14 arm64 and
-Windows. The E10 tranche described above is locally verified and still requires
-its final-head CI run after commit. The optimized local macOS arm64 `metisblack 0.1.0` build has SHA-256
+Windows. The optimized local macOS arm64 `metisblack 0.1.0` build has SHA-256
 `7f94f8d970c2c9d693f884ea1271bd1abdbe38f2267a9553b87e78678f4c0086`;
 it is not a signed or published release artifact.
 CI is configured to run:

@@ -84,8 +84,8 @@ macOS arm64 `metisblack 0.1.0` artifact has SHA-256
 `7f94f8d970c2c9d693f884ea1271bd1abdbe38f2267a9553b87e78678f4c0086`.
 
 GitHub Actions run
-[`36277987141`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36277987141)
-passes final-head commit `6f45b98` with the locked Rust 1.88 workspace on Ubuntu,
+[`36283953344`](https://github.com/Ryan-Applied/MetisBLACK/actions/runs/36283953344)
+passes E10 scheduler commit `d2b4dec` with the locked Rust 1.88 workspace on Ubuntu,
 macOS 14 arm64 and Windows, including strict formatting, checking, tests, Clippy
 and dependency policy. This proves the bounded contracts, deterministic fixtures
 and tested CLI integrations in this repository; it does not prove production
